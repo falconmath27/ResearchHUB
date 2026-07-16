@@ -1,0 +1,16 @@
+# Python
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Environment files and generated output
+.env
+.env.*
+!.env.example
+frontend/.next/
+frontend/node_modules/
+
+# Editor and operating-system files
+.DS_Store
+.vscode/
