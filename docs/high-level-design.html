@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="ResearchHub high-level design and delivery plan." />
+    <title>ResearchHub | High-Level Design</title>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "base",
+        securityLevel: "strict",
+        themeVariables: {
+          primaryColor: "#e0e7ff",
+          primaryTextColor: "#172554",
+          primaryBorderColor: "#4f46e5",
+          lineColor: "#64748b",
+          secondaryColor: "#ecfeff",
+          tertiaryColor: "#f8fafc",
+          fontFamily: "Arial, sans-serif",
+        },
+      });
+    </script>
+    <style>
+      :root { --ink: #172554; --muted: #475569; --paper: #f8fafc; --line: #cbd5e1; --brand: #4f46e5; --brand-soft: #e0e7ff; --accent: #0f766e; --dark: #0f172a; }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; background: var(--paper); color: var(--dark); font: 16px/1.6 Arial, sans-serif; }
+      a { color: var(--brand); }
+      a:hover { color: #3730a3; }
+      .shell { max-width: 1240px; margin: 0 auto; padding: 0 24px 64px; }
+      header { margin: 0 -24px 28px; padding: 64px max(24px, calc((100vw - 1192px) / 2)); color: white; background: radial-gradient(circle at 85% 20%, #0f766e 0, transparent 27%), linear-gradient(135deg, #172554, #312e81); }
+      header p { max-width: 720px; color: #e0e7ff; font-size: 1.08rem; }
+      h1 { margin: 0; font-size: clamp(2.25rem, 5vw, 4.4rem); letter-spacing: -0.06em; }
+      h2 { margin: 0 0 16px; color: var(--ink); font-size: 1.7rem; letter-spacing: -0.03em; scroll-margin-top: 24px; }
+      h3 { margin: 24px 0 8px; color: var(--ink); }
+      .eyebrow { margin: 0 0 8px; color: #a7f3d0; font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+      .meta, .grid { display: grid; gap: 16px; }
+      .meta { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 32px; }
+      .meta div, .card { border: 1px solid var(--line); border-radius: 14px; background: white; }
+      .meta div { padding: 13px 15px; color: #c7d2fe; }
+      .meta strong { display: block; color: white; font-size: .9rem; }
+      .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 28px; }
+      nav { position: sticky; top: 16px; align-self: start; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: white; }
+      nav a { display: block; padding: 6px 0; color: var(--muted); font-size: .92rem; text-decoration: none; }
+      nav a:hover { color: var(--brand); }
+      section { margin-bottom: 22px; padding: 30px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 8px 30px rgb(15 23 42 / 4%); }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .card { padding: 18px; }
+      .card h3 { margin-top: 0; }
+      .card p { margin-bottom: 0; color: var(--muted); }
+      .callout { padding: 16px 18px; border-left: 4px solid var(--accent); border-radius: 6px; background: #f0fdfa; }
+      .diagram { overflow-x: auto; margin: 18px 0; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; }
+      .mermaid { min-width: 680px; text-align: center; }
+      table { width: 100%; border-collapse: collapse; font-size: .94rem; }
+      th, td { padding: 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+      th { color: var(--ink); background: #f8fafc; }
+      code { padding: .12em .35em; border-radius: 4px; background: #eef2ff; color: #312e81; }
+      ul { padding-left: 20px; }
+      .status { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--brand-soft); color: #3730a3; font-size: .78rem; font-weight: 700; }
+      footer { padding: 16px 0; color: var(--muted); font-size: .9rem; }
+      @media (max-width: 920px) { .layout { grid-template-columns: 1fr; } nav { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; } .meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (max-width: 640px) { .shell { padding: 0 14px 32px; } header { margin: 0 -14px 18px; padding: 42px 18px; } section { padding: 22px 16px; } .grid, .grid.three, .meta { grid-template-columns: 1fr; } nav { grid-template-columns: 1fr; } }
+      @media print { body { background: white; } header { color: var(--dark); background: white; border-bottom: 2px solid var(--ink); } header p { color: var(--muted); } .meta div { color: var(--muted); } .meta strong { color: var(--dark); } nav { display: none; } section { break-inside: avoid; box-shadow: none; } .layout { display: block; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="shell">
+        <p class="eyebrow">Architecture document · MVP</p>
+        <h1>ResearchHub High-Level Design</h1>
+        <p>A collaborative research workspace for private project work, controlled public discovery, and reliable AI-assisted source analysis.</p>
+        <div class="meta">
+          <div><strong>Product</strong>ResearchHub</div>
+          <div><strong>Status</strong>Living design</div>
+          <div><strong>Target</strong>8-week MVP</div>
+          <div><strong>Last updated</strong>July 2026</div>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell layout">
+      <nav aria-label="Table of contents">
+        <strong>Contents</strong>
+        <a href="#summary">Executive summary</a>
+        <a href="#scope">Scope</a>
+        <a href="#principles">Design principles</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#flows">Key request flows</a>
+        <a href="#data">Data model</a>
+        <a href="#api">API design</a>
+        <a href="#security">Security and privacy</a>
+        <a href="#operations">Operations</a>
+        <a href="#quality">Quality strategy</a>
+        <a href="#roadmap">Delivery roadmap</a>
+        <a href="#risks">Risks and decisions</a>
+      </nav>
+
+      <div>
+        <section id="summary">
+          <h2>Executive Summary</h2>
+          <p>ResearchHub helps a research team turn an early idea into shared notes, tasks, saved sources, discussion, and a carefully controlled public project page. It is not a code-hosting system; code and datasets remain in GitHub or other dedicated repositories.</p>
+          <div class="grid three">
+            <article class="card"><h3>Private workspaces</h3><p>Role-protected projects for notes, tasks, messages, and sources.</p></article>
+            <article class="card"><h3>Useful AI</h3><p>One transparent source-analysis workflow with clear job status and safe failure handling.</p></article>
+            <article class="card"><h3>Public discovery</h3><p>Opt-in public project cards, filtering, bookmarks, and collaboration requests.</p></article>
+          </div>
+        </section>
+
+        <section id="scope">
+          <h2>Scope and Success Criteria</h2>
+          <div class="grid">
+            <article class="card"><h3>In scope for the MVP</h3><ul><li>Authentication, profiles, and private projects.</li><li>Members with Owner, Editor, and Viewer roles.</li><li>Notes, tasks, messages, and saved sources.</li><li>Realtime updates for chat and task changes.</li><li>One AI source-analysis workflow.</li><li>Controlled public discovery and join requests.</li></ul></article>
+            <article class="card"><h3>Deliberately out of scope</h3><ul><li>Google Docs-style simultaneous rich-text editing.</li><li>Custom model training or autonomous agents.</li><li>Microservices, Kubernetes, and premature scaling.</li><li>Recommendation systems before public search works.</li></ul></article>
+          </div>
+          <p class="callout"><strong>Definition of done:</strong> authenticated users can collaborate safely in a private project, use one reliable AI analysis tool, and discover or request access to public projects.</p>
+        </section>
+
+        <section id="principles">
+          <h2>Design Principles</h2>
+          <div class="grid three">
+            <article class="card"><h3>Server is authoritative</h3><p>The UI improves usability but never grants access. FastAPI and database policies enforce permissions.</p></article>
+            <article class="card"><h3>Database is the record</h3><p>PostgreSQL is the source of truth. Realtime signals changes but does not replace canonical data.</p></article>
+            <article class="card"><h3>Start simple</h3><p>Use a modular monolith first. Add a queue and worker only when synchronous AI analysis is proven.</p></article>
+          </div>
+        </section>
+
+        <section id="architecture">
+          <h2>System Architecture</h2>
+          <p>The MVP is a modular monolith: one web application, one trusted API, and one PostgreSQL database. AI background processing is introduced after the first synchronous workflow proves its value.</p>
+          <div class="diagram">
+            <pre class="mermaid">
+flowchart LR
+  U[Researcher browser] --> W[Next.js web app]
+  W -->|HTTPS JSON| A[FastAPI API]
+  W <-->|Realtime updates| R[Supabase Realtime]
+  A --> P[(PostgreSQL + pgvector)]
+  A --> S[Supabase Object Storage]
+  A --> Q[Redis queue]
+  Q --> K[Python AI worker]
+  K --> P
+  K --> M[Cloud LLM or local Ollama]
+            </pre>
+          </div>
+          <table>
+            <thead><tr><th>Layer</th><th>Technology</th><th>Responsibility</th></tr></thead>
+            <tbody>
+              <tr><td>Web UI</td><td>Next.js, React, TypeScript, Tailwind CSS</td><td>Pages, forms, optimistic UI, and accessible presentation.</td></tr>
+              <tr><td>API</td><td>Python, FastAPI, Pydantic, SQLAlchemy</td><td>Validation, authorization, business rules, and JSON APIs.</td></tr>
+              <tr><td>Platform</td><td>Supabase</td><td>PostgreSQL, authentication, storage, realtime, and row-level security.</td></tr>
+              <tr><td>AI processing</td><td>Python, RQ or Celery, Redis</td><td>Slow, retryable analysis jobs kept outside the HTTP request path.</td></tr>
+              <tr><td>Deployment</td><td>Vercel, Supabase, Render or Railway</td><td>Separate web, database/storage, and API/worker hosting.</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="flows">
+          <h2>Key Request Flows</h2>
+          <h3>Create a project</h3>
+          <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  participant B as Browser
+  participant A as FastAPI
+  participant D as PostgreSQL
+  B->>A: POST /projects (title, summary, field)
+  A->>A: Validate input and authenticate user
+  A->>D: Insert project and owner membership
+  D-->>A: Created project
+  A-->>B: 201 Created + project JSON
+          </pre></div>
+          <h3>Run AI source analysis</h3>
+          <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  participant B as Browser
+  participant A as FastAPI
+  participant D as PostgreSQL
+  participant Q as Queue
+  participant W as AI worker
+  participant L as Model provider
+  B->>A: POST /ai/jobs
+  A->>A: Verify project membership
+  A->>D: Create ai_jobs row (queued)
+  A->>Q: Enqueue job id
+  A-->>B: 202 Accepted + job id
+  Q->>W: Deliver job id
+  W->>L: Analyze permitted source text
+  L-->>W: Structured analysis
+  W->>D: Save result (complete or failed)
+  D-->>B: Realtime status update
+          </pre></div>
+          <p class="callout">The AI worker prevents a slow or failing model provider from blocking the user-facing API. Retries are limited and failures return safe messages without inventing results.</p>
+        </section>
+
+        <section id="data">
+          <h2>Core Data Model</h2>
+          <div class="diagram"><pre class="mermaid">
+erDiagram
+  USERS ||--o{ PROJECT_MEMBERS : joins
+  PROJECTS ||--o{ PROJECT_MEMBERS : has
+  PROJECTS ||--o{ NOTES : contains
+  NOTES ||--o{ NOTE_VERSIONS : records
+  PROJECTS ||--o{ TASKS : tracks
+  PROJECTS ||--o{ MESSAGES : discusses
+  PROJECTS ||--o{ SOURCES : saves
+  PROJECTS ||--o{ AI_JOBS : requests
+  USERS ||--o{ COLLAB_REQUESTS : sends
+  PROJECTS ||--o{ COLLAB_REQUESTS : receives
+          </pre></div>
+          <table>
+            <thead><tr><th>Entity</th><th>Essential fields</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>users</code></td><td>id, name, institution, bio, avatar_url, created_at</td><td>Researcher identity and profile.</td></tr>
+              <tr><td><code>projects</code></td><td>id, owner_id, title, summary, visibility, status, tags, published_at</td><td>Top-level research workspace.</td></tr>
+              <tr><td><code>project_members</code></td><td>project_id, user_id, role, joined_at</td><td>Authorization relationship between a user and project.</td></tr>
+              <tr><td><code>notes</code> / <code>note_versions</code></td><td>project_id, content, version, updated_by, timestamps</td><td>Research notes and non-destructive history.</td></tr>
+              <tr><td><code>tasks</code></td><td>project_id, title, assignee_id, status, due_at</td><td>Work planning and progress.</td></tr>
+              <tr><td><code>messages</code></td><td>project_id, author_id, body, created_at</td><td>Project discussion.</td></tr>
+              <tr><td><code>sources</code></td><td>project_id, title, url, abstract, file_path, embedding</td><td>Saved papers, links, and later semantic search.</td></tr>
+              <tr><td><code>ai_jobs</code></td><td>project_id, type, status, result, error, attempts</td><td>Reliable asynchronous AI operations.</td></tr>
+            </tbody>
+          </table>
+          <p>Use UUID primary keys, foreign keys, timestamps, and indexes on project ownership, membership, task status, timestamps, tags, and vector columns where needed.</p>
+        </section>
+
+        <section id="api">
+          <h2>API Design</h2>
+          <p>Use versioned, resource-oriented HTTP endpoints. Every project-scoped route authenticates the caller and verifies membership before reading or changing data.</p>
+          <table>
+            <thead><tr><th>Method</th><th>Endpoint</th><th>Purpose</th><th>Expected status</th></tr></thead>
+            <tbody>
+              <tr><td>POST</td><td><code>/projects</code></td><td>Create a project and owner membership.</td><td>201</td></tr>
+              <tr><td>GET / PATCH</td><td><code>/projects/{id}</code></td><td>Read or update project details.</td><td>200</td></tr>
+              <tr><td>POST</td><td><code>/projects/{id}/members</code></td><td>Invite or add a collaborator.</td><td>201</td></tr>
+              <tr><td>GET / POST</td><td><code>/projects/{id}/tasks</code></td><td>List or create tasks.</td><td>200 / 201</td></tr>
+              <tr><td>GET / POST</td><td><code>/projects/{id}/notes</code></td><td>List or create notes.</td><td>200 / 201</td></tr>
+              <tr><td>GET / POST</td><td><code>/projects/{id}/messages</code></td><td>Read or send chat messages.</td><td>200 / 201</td></tr>
+              <tr><td>POST / GET</td><td><code>/ai/jobs</code> / <code>/ai/jobs/{id}</code></td><td>Queue and inspect an AI task.</td><td>202 / 200</td></tr>
+              <tr><td>GET</td><td><code>/explore</code></td><td>Filter and search public projects only.</td><td>200</td></tr>
+            </tbody>
+          </table>
+          <h3>Response conventions</h3>
+          <ul><li><code>200</code> successful read or update</li><li><code>201</code> resource created</li><li><code>202</code> background job accepted</li><li><code>401</code> unauthenticated</li><li><code>403</code> authenticated but not permitted</li><li><code>404</code> resource unavailable or hidden by access policy</li><li><code>422</code> invalid request data</li></ul>
+        </section>
+
+        <section id="security">
+          <h2>Security, Authorization, and Privacy</h2>
+          <div class="grid three">
+            <article class="card"><h3>Role model</h3><p><strong>Owner:</strong> settings, publishing, membership, deletion. <strong>Editor:</strong> notes, tasks, messages, sources. <strong>Viewer:</strong> read-only access.</p></article>
+            <article class="card"><h3>Defence in depth</h3><p>FastAPI performs role checks; Supabase Row Level Security repeats the same rule at the database boundary.</p></article>
+            <article class="card"><h3>AI privacy</h3><p>Never expose or persist provider keys. Show users when content leaves the product for cloud analysis; support local Ollama later.</p></article>
+          </div>
+          <div class="diagram"><pre class="mermaid">
+flowchart TD
+  R[API request] --> I{Authenticated?}
+  I -- No --> U[401 Unauthorized]
+  I -- Yes --> M{Project member?}
+  M -- No --> F[403 Forbidden or 404]
+  M -- Yes --> O{Role permits action?}
+  O -- No --> F
+  O -- Yes --> D[Database action protected by RLS]
+          </pre></div>
+          <ul><li>Do not trust hidden buttons, client-side route guards, or a browser-supplied user id.</li><li>Keep private database credentials and AI secrets only in backend or worker environment variables.</li><li>Do not log source text, passwords, tokens, or API keys by default.</li><li>Embed and search only content explicitly published as public.</li></ul>
+        </section>
+
+        <section id="operations">
+          <h2>Environments and Operations</h2>
+          <table>
+            <thead><tr><th>Concern</th><th>Development</th><th>Production</th></tr></thead>
+            <tbody>
+              <tr><td>Configuration</td><td>Local <code>.env</code> ignored by Git</td><td>Host-managed environment variables and secret store</td></tr>
+              <tr><td>Database</td><td>Dedicated development Supabase/PostgreSQL project</td><td>Separate production project with backups</td></tr>
+              <tr><td>Logs</td><td>Readable local request logs</td><td>Structured logs with request id and job id, no secrets</td></tr>
+              <tr><td>Backups</td><td>Disposable seed data</td><td>Scheduled database backups and a tested restore procedure</td></tr>
+              <tr><td>Rate limits</td><td>Minimal during local work</td><td>Protect login, uploads, chat, AI jobs, and collaboration requests</td></tr>
+            </tbody>
+          </table>
+          <h3>Deployment topology</h3>
+          <div class="diagram"><pre class="mermaid">
+flowchart LR
+  V[Vercel: Next.js] --> A[Render/Railway: FastAPI]
+  A --> S[Supabase: Auth, Postgres, Storage, Realtime]
+  A --> R[Redis + worker when AI jobs begin]
+            </pre></div>
+        </section>
+
+        <section id="quality">
+          <h2>Quality Strategy</h2>
+          <div class="grid">
+            <article class="card"><h3>Testing pyramid</h3><ul><li><strong>Unit:</strong> Pydantic models and business rules.</li><li><strong>Integration:</strong> FastAPI endpoints, authorization, database queries.</li><li><strong>End-to-end:</strong> sign in → project → task → AI-job happy path.</li></ul></article>
+            <article class="card"><h3>Acceptance checks</h3><ul><li>Unauthenticated visitors cannot access the dashboard.</li><li>Private projects cannot be opened by changing a URL.</li><li>Viewer write attempts return <code>403</code>.</li><li>Realtime changes converge with canonical database state after reload.</li><li>Failed AI calls never create fabricated analysis.</li></ul></article>
+          </div>
+          <p>Use linting, type checks, API tests, and accessibility checks in continuous integration. Keep test fixtures synthetic; never use unpublished research material in demos.</p>
+        </section>
+
+        <section id="roadmap">
+          <h2>Delivery Roadmap</h2>
+          <table>
+            <thead><tr><th>Phase</th><th>Outcome</th><th>Key learning</th></tr></thead>
+            <tbody>
+              <tr><td><span class="status">0</span> Setup</td><td>Organized repository, landing page, FastAPI basics.</td><td>Git, Python, HTTP, JSON, REST.</td></tr>
+              <tr><td><span class="status">1</span> Accounts and projects</td><td>Auth, dashboard, create-project flow.</td><td>Supabase auth, SQL keys, forms.</td></tr>
+              <tr><td><span class="status">2</span> Collaboration data</td><td>Members, notes, tasks, roles.</td><td>Routers, SQLAlchemy, migrations, RBAC.</td></tr>
+              <tr><td><span class="status">3</span> Realtime</td><td>Chat, live task changes, presence.</td><td>Pub/sub, optimistic UI, concurrency.</td></tr>
+              <tr><td><span class="status">4</span> Sources</td><td>Links, uploads, note history, search.</td><td>Storage policies, full-text search.</td></tr>
+              <tr><td><span class="status">5</span> AI analysis</td><td>Source summary, claims, limitations, gaps.</td><td>Structured output, queues, retries.</td></tr>
+              <tr><td><span class="status">6–8</span> Discovery and launch</td><td>Public explore, semantic search, deployment.</td><td>Privacy filters, pgvector, operations.</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="risks">
+          <h2>Risks and Architectural Decisions</h2>
+          <table>
+            <thead><tr><th>Risk or decision</th><th>Approach</th><th>Reason</th></tr></thead>
+            <tbody>
+              <tr><td>Private-project leakage</td><td>API membership checks plus Supabase RLS.</td><td>Browser UI alone cannot protect data.</td></tr>
+              <tr><td>Simultaneous updates</td><td>Last-write-wins with timestamps and history; add optimistic locking later.</td><td>Simple and defensible before CRDT complexity.</td></tr>
+              <tr><td>Duplicate AI jobs</td><td>Disable while queued and use an idempotency key.</td><td>Prevents cost and confusing duplicate output.</td></tr>
+              <tr><td>Worker/provider failure</td><td>Bounded retries, safe errors, explicit job states.</td><td>Reliability without pretending a failed analysis succeeded.</td></tr>
+              <tr><td>Architecture sprawl</td><td>Modular monolith first, queue only when needed.</td><td>Finishing a reliable system is more valuable than premature microservices.</td></tr>
+            </tbody>
+          </table>
+          <h3>Engineering decision log</h3>
+          <p>Record major decisions in <a href="decisions.md">docs/decisions.md</a>: problem, options, decision, trade-off, and date. This document should evolve as implementation proves or changes assumptions.</p>
+        </section>
+      </div>
+    </main>
+    <footer class="shell">ResearchHub · High-Level Design · Companion documents: <a href="decisions.md">decisions.md</a> and <a href="../README.md">README.md</a></footer>
+  </body>
+</html>

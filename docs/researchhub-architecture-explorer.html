@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ResearchHub Architecture Explorer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            canvas: "#070910",
+            panel: "#0d111c",
+            raised: "#121827",
+            edge: "#242c3d",
+            mint: "#5eead4",
+            violet: "#a78bfa"
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    :root { color-scheme: dark; }
+    * { scrollbar-width: thin; scrollbar-color: #293247 transparent; }
+    body {
+      background:
+        radial-gradient(circle at 12% 0%, rgba(94,234,212,.09), transparent 28rem),
+        radial-gradient(circle at 92% 9%, rgba(167,139,250,.09), transparent 30rem),
+        #070910;
+    }
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+      background-size: 26px 26px;
+    }
+    .glass { background: rgba(13,17,28,.86); backdrop-filter: blur(18px); }
+    .tree-row::before {
+      content: "";
+      position: absolute;
+      inset: 5px auto 5px 0;
+      width: 2px;
+      border-radius: 999px;
+      background: transparent;
+    }
+    .tree-row.selected {
+      color: #f8fafc;
+      background: linear-gradient(90deg, rgba(94,234,212,.13), rgba(94,234,212,.025));
+    }
+    .tree-row.selected::before {
+      background: #5eead4;
+      box-shadow: 0 0 14px rgba(94,234,212,.75);
+    }
+    .tree-children { display: block; }
+    .tree-children.collapsed { display: none; }
+    .chevron { transition: transform .18s ease; }
+    .chevron.collapsed { transform: rotate(-90deg); }
+    .map-node { cursor: pointer; transition: opacity .18s ease, filter .18s ease; }
+    .map-node:hover { filter: brightness(1.18); }
+    .map-node.dimmed { opacity: .25; }
+    .map-node.active rect {
+      stroke-width: 2.5;
+      filter: drop-shadow(0 0 10px rgba(94,234,212,.55));
+    }
+    .flow-line {
+      stroke-dasharray: 8 8;
+      animation: flow 18s linear infinite;
+    }
+    @keyframes flow { to { stroke-dashoffset: -160; } }
+    @keyframes reveal {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .reveal { animation: reveal .2s ease both; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-300 antialiased">
+  <div class="grid-bg min-h-screen">
+    <header class="glass sticky top-0 z-40 border-b border-white/[.07]">
+      <div class="flex min-h-16 items-center justify-between gap-4 px-4 sm:px-6">
+        <div class="flex min-w-0 items-center gap-3">
+          <div class="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-mint/20 bg-mint/10 text-mint shadow-[0_0_38px_rgba(94,234,212,.13)]">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M4 5.5 12 2l8 3.5-8 3.5-8-3.5Z"/>
+              <path d="M4 10.5 12 14l8-3.5M4 15.5 12 19l8-3.5"/>
+            </svg>
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <h1 class="truncate font-semibold tracking-tight text-slate-100">Research<span class="text-mint">Hub</span></h1>
+              <span class="rounded-full border border-violet/20 bg-violet/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.16em] text-violet">Architecture</span>
+            </div>
+            <p class="truncate text-xs text-slate-500">Interactive project structure explorer</p>
+          </div>
+        </div>
+        <div class="hidden items-center gap-5 text-xs text-slate-500 sm:flex">
+          <span><strong class="font-medium text-slate-200">22</strong> components</span>
+          <span><strong class="font-medium text-slate-200">2</strong> applications</span>
+          <span class="flex items-center gap-2 text-emerald-300">
+            <i class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]"></i>
+            Local workspace
+          </span>
+        </div>
+      </div>
+    </header>
+
+    <main class="grid min-h-[calc(100vh-4rem)] grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <aside class="glass border-b border-white/[.07] lg:border-b-0 lg:border-r">
+        <div class="flex items-center justify-between border-b border-white/[.06] px-4 py-4">
+          <div>
+            <p class="text-[10px] font-semibold uppercase tracking-[.2em] text-slate-500">Workspace</p>
+            <p class="mt-1 text-sm font-medium text-slate-200">Project explorer</p>
+          </div>
+          <button id="collapseAll" class="rounded-lg border border-white/[.08] bg-white/[.03] p-2 text-slate-400 transition hover:border-mint/30 hover:bg-mint/10 hover:text-mint" aria-label="Collapse all folders">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="m8 15 4-4 4 4M12 11V21"/>
+              <path d="M20 8.5V5a2 2 0 0 0-2-2h-5l-2 2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2"/>
+            </svg>
+          </button>
+        </div>
+        <div class="border-b border-white/[.06] p-3">
+          <label class="relative block">
+            <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+            </svg>
+            <input id="search" type="search" placeholder="Filter files..." class="w-full rounded-xl border border-white/[.08] bg-black/20 py-2.5 pl-9 pr-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-mint/40 focus:ring-2 focus:ring-mint/10">
+          </label>
+        </div>
+        <div id="tree" class="max-h-[520px] overflow-y-auto px-2 py-3 lg:max-h-[calc(100vh-12.5rem)]"></div>
+        <div class="m-3 rounded-xl border border-white/[.07] bg-white/[.025] p-3">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-500">Repository health</span>
+            <span class="font-medium text-emerald-300">Healthy</span>
+          </div>
+          <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-800">
+            <div class="h-full w-[82%] rounded-full bg-gradient-to-r from-teal-400 to-cyan-300"></div>
+          </div>
+          <p class="mt-2 text-[11px] leading-5 text-slate-600">Core scaffold, validation, and API tests are in place.</p>
+        </div>
+      </aside>
+
+      <section class="min-w-0">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-white/[.06] px-4 py-3 sm:px-6">
+          <div id="breadcrumb" class="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-slate-500"></div>
+          <span id="stateBadge" class="rounded-full border border-mint/20 bg-mint/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[.14em] text-mint">Selected</span>
+        </div>
+
+        <div class="p-4 sm:p-6">
+          <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_330px]">
+            <div class="min-w-0 space-y-5">
+              <section class="overflow-hidden rounded-2xl border border-white/[.08] bg-panel/80 shadow-[0_0_45px_rgba(94,234,212,.08)]">
+                <div class="border-b border-white/[.07] p-5">
+                  <div class="flex flex-wrap items-start justify-between gap-4">
+                    <div class="flex min-w-0 items-start gap-3">
+                      <div id="selectedIcon" class="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-mint/20 bg-mint/10 text-mint"></div>
+                      <div class="min-w-0">
+                        <p id="selectedKind" class="text-[10px] font-semibold uppercase tracking-[.18em] text-teal-300"></p>
+                        <h2 id="selectedName" class="mt-1 truncate text-xl font-semibold tracking-tight text-slate-100 sm:text-2xl"></h2>
+                        <p id="selectedPath" class="mt-1 break-all font-mono text-xs text-slate-500"></p>
+                      </div>
+                    </div>
+                    <span id="responsibility" class="rounded-full border border-violet/20 bg-violet/10 px-3 py-1.5 text-xs font-medium text-violet"></span>
+                  </div>
+                </div>
+                <div id="details" class="min-h-72 p-5"></div>
+              </section>
+
+              <section class="overflow-hidden rounded-2xl border border-white/[.08] bg-panel/80 shadow-[0_0_40px_rgba(167,139,250,.08)]">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-white/[.07] px-5 py-4">
+                  <div>
+                    <p class="text-[10px] font-semibold uppercase tracking-[.18em] text-violet">System topology</p>
+                    <h2 class="mt-1 font-semibold text-slate-100">Component dependency map</h2>
+                  </div>
+                  <div class="flex items-center gap-3 text-[11px] text-slate-500">
+                    <span class="flex items-center gap-1.5"><i class="h-2 w-2 rounded-full bg-mint"></i>Current</span>
+                    <span class="flex items-center gap-1.5"><i class="h-2 w-2 rounded-full bg-violet"></i>Planned</span>
+                  </div>
+                </div>
+                <div class="overflow-x-auto p-3 sm:p-5">
+                  <svg class="min-w-[760px]" width="100%" height="395" viewBox="0 0 900 395" role="img" aria-label="ResearchHub component dependency map">
+                    <defs>
+                      <linearGradient id="currentFill" x1="0" x2="1"><stop stop-color="#10232c"/><stop offset="1" stop-color="#132033"/></linearGradient>
+                      <linearGradient id="apiFill" x1="0" x2="1"><stop stop-color="#211b36"/><stop offset="1" stop-color="#151d33"/></linearGradient>
+                      <linearGradient id="plannedFill" x1="0" x2="1"><stop stop-color="#171a27"/><stop offset="1" stop-color="#111521"/></linearGradient>
+                      <marker id="arrowMint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#5eead4"/></marker>
+                      <marker id="arrowViolet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#a78bfa"/></marker>
+                    </defs>
+                    <g opacity=".12" stroke="#94a3b8">
+                      <path d="M0 50H900M0 125H900M0 200H900M0 275H900M0 350H900"/>
+                      <path d="M75 0V395M225 0V395M375 0V395M525 0V395M675 0V395M825 0V395"/>
+                    </g>
+                    <g fill="none" stroke-width="2">
+                      <path class="flow-line" d="M220 100C280 100 290 100 345 100" stroke="#5eead4" marker-end="url(#arrowMint)"/>
+                      <path class="flow-line" d="M500 100C570 100 580 72 645 72" stroke="#5eead4" marker-end="url(#arrowMint)"/>
+                      <path class="flow-line" d="M500 100C570 100 580 157 645 157" stroke="#a78bfa" marker-end="url(#arrowViolet)"/>
+                      <path class="flow-line" d="M420 143V249" stroke="#5eead4" marker-end="url(#arrowMint)"/>
+                      <path class="flow-line" d="M500 285C570 285 580 242 645 242" stroke="#a78bfa" marker-end="url(#arrowViolet)"/>
+                      <path class="flow-line" d="M730 278V335" stroke="#a78bfa" marker-end="url(#arrowViolet)"/>
+                    </g>
+                    <g class="map-node" data-map="frontend" data-path="frontend" tabindex="0">
+                      <rect x="70" y="56" width="150" height="88" rx="17" fill="url(#currentFill)" stroke="#5eead4" stroke-opacity=".7"/>
+                      <circle cx="96" cy="82" r="9" fill="#5eead4" fill-opacity=".18" stroke="#5eead4"/>
+                      <text x="114" y="86" fill="#f8fafc" font-size="15" font-weight="600">Next.js UI</text>
+                      <text x="92" y="114" fill="#94a3b8" font-size="11">React · TypeScript</text>
+                      <text x="92" y="131" fill="#64748b" font-size="10">frontend/</text>
+                    </g>
+                    <g class="map-node" data-map="api" data-path="backend/app/main.py" tabindex="0">
+                      <rect x="345" y="56" width="155" height="88" rx="17" fill="url(#apiFill)" stroke="#a78bfa" stroke-opacity=".75"/>
+                      <circle cx="372" cy="82" r="9" fill="#a78bfa" fill-opacity=".18" stroke="#a78bfa"/>
+                      <text x="390" y="86" fill="#f8fafc" font-size="15" font-weight="600">FastAPI</text>
+                      <text x="368" y="114" fill="#94a3b8" font-size="11">Routes · business rules</text>
+                      <text x="368" y="131" fill="#64748b" font-size="10">backend/app/main.py</text>
+                    </g>
+                    <g class="map-node" data-map="schemas" data-path="backend/app/schemas.py" tabindex="0">
+                      <rect x="645" y="37" width="170" height="70" rx="15" fill="url(#currentFill)" stroke="#5eead4" stroke-opacity=".65"/>
+                      <text x="670" y="67" fill="#f8fafc" font-size="14" font-weight="600">Pydantic schemas</text>
+                      <text x="670" y="88" fill="#64748b" font-size="10">Validation boundary</text>
+                    </g>
+                    <g class="map-node" data-map="database" data-path="architecture/database" tabindex="0">
+                      <rect x="645" y="122" width="170" height="70" rx="15" fill="url(#plannedFill)" stroke="#a78bfa" stroke-opacity=".6" stroke-dasharray="5 5"/>
+                      <text x="670" y="152" fill="#f8fafc" font-size="14" font-weight="600">Supabase</text>
+                      <text x="670" y="173" fill="#64748b" font-size="10">PostgreSQL · Auth · RLS</text>
+                    </g>
+                    <g class="map-node" data-map="tests" data-path="backend/tests/test_main.py" tabindex="0">
+                      <rect x="340" y="249" width="160" height="76" rx="16" fill="url(#currentFill)" stroke="#67e8f9" stroke-opacity=".55"/>
+                      <text x="367" y="280" fill="#f8fafc" font-size="14" font-weight="600">pytest suite</text>
+                      <text x="367" y="301" fill="#64748b" font-size="10">Unit · API integration</text>
+                    </g>
+                    <g class="map-node" data-map="queue" data-path="architecture/worker" tabindex="0">
+                      <rect x="645" y="207" width="170" height="70" rx="15" fill="url(#plannedFill)" stroke="#a78bfa" stroke-opacity=".6" stroke-dasharray="5 5"/>
+                      <text x="670" y="237" fill="#f8fafc" font-size="14" font-weight="600">Redis queue</text>
+                      <text x="670" y="258" fill="#64748b" font-size="10">Queued AI jobs</text>
+                    </g>
+                    <g class="map-node" data-map="worker" data-path="architecture/worker" tabindex="0">
+                      <rect x="645" y="335" width="170" height="56" rx="15" fill="url(#plannedFill)" stroke="#a78bfa" stroke-opacity=".6" stroke-dasharray="5 5"/>
+                      <text x="670" y="360" fill="#f8fafc" font-size="14" font-weight="600">Python AI worker</text>
+                      <text x="670" y="378" fill="#64748b" font-size="10">LLM · retries · results</text>
+                    </g>
+                    <text x="247" y="88" fill="#64748b" font-size="10">HTTPS / JSON</text>
+                    <text x="528" y="78" fill="#64748b" font-size="10">validates</text>
+                    <text x="528" y="142" fill="#64748b" font-size="10">persists</text>
+                  </svg>
+                </div>
+              </section>
+            </div>
+
+            <aside class="space-y-5">
+              <section class="rounded-2xl border border-white/[.08] bg-panel/80 p-5">
+                <p class="text-[10px] font-semibold uppercase tracking-[.18em] text-cyan-300">Metadata</p>
+                <h2 class="mt-1 font-semibold text-slate-100">Component details</h2>
+                <dl id="metadata" class="mt-5 space-y-4"></dl>
+              </section>
+              <section class="rounded-2xl border border-white/[.08] bg-panel/80 p-5">
+                <p class="text-[10px] font-semibold uppercase tracking-[.18em] text-violet">Technology</p>
+                <h2 class="mt-1 font-semibold text-slate-100">Stack in context</h2>
+                <div id="tech" class="mt-4 flex flex-wrap gap-2"></div>
+              </section>
+              <section class="rounded-2xl border border-white/[.08] bg-gradient-to-br from-mint/[.07] to-violet/[.05] p-5">
+                <p class="text-[10px] font-semibold uppercase tracking-[.18em] text-mint">Architecture rule</p>
+                <p id="rule" class="mt-3 text-sm leading-6 text-slate-300"></p>
+              </section>
+            </aside>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const icons = {
+      folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>`,
+      code: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 6l-4 12"/></svg>`,
+      file: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v5h5"/></svg>`,
+      database: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg>`
+    };
+
+    const root = {
+      name: "ResearchHUB", type: "folder", size: "3.1 MB", language: "Full-stack workspace", responsibility: "Project Root",
+      summary: "The root workspace containing the Next.js frontend, FastAPI backend, tests, architecture documentation, and learning notes.",
+      rule: "Keep frontend and backend concerns separate while maintaining one repository as the product source of truth.",
+      tech: ["Next.js", "FastAPI", "TypeScript", "Python", "pytest"],
+      children: [
+        {
+          name: "frontend", type: "folder", size: "2.4 MB", language: "TypeScript / CSS", responsibility: "Frontend UI",
+          summary: "The browser-facing Next.js application responsible for presentation, interaction, routing, and future API calls.",
+          rule: "The frontend improves usability but must never be trusted to enforce authorization.",
+          tech: ["Next.js 16", "React 19", "TypeScript", "Tailwind CSS"],
+          children: [
+            { name: "src", type: "folder", size: "42 KB", language: "TypeScript / CSS", responsibility: "Application Source", summary: "Contains application routes, global styling, and browser-side behavior.", rule: "Keep route-level components focused and extract reusable UI when repetition appears.", tech: ["App Router", "React"], children: [
+              { name: "app", type: "folder", size: "42 KB", language: "TSX / CSS", responsibility: "Frontend UI", summary: "Next.js App Router directory containing the shared shell, landing page, and global styles.", rule: "Each route owns its loading, error, and empty states.", tech: ["App Router", "React", "Tailwind CSS"], children: [
+                { name: "page.tsx", type: "file", size: "7.2 KB", language: "TypeScript React", responsibility: "Frontend UI", summary: "Renders the ResearchHub landing page, CTA interaction, product preview, and feature overview.", rule: "Authenticated application behavior belongs in dedicated routes rather than the marketing page.", tech: ["React", "TSX", "useState", "Tailwind CSS"] },
+                { name: "layout.tsx", type: "file", size: "1.1 KB", language: "TypeScript React", responsibility: "Application Shell", summary: "Defines the shared HTML shell and metadata used by every frontend route.", rule: "Place global concerns here and keep route-specific state inside routes.", tech: ["Next.js", "React", "Metadata API"] },
+                { name: "globals.css", type: "file", size: "620 B", language: "CSS", responsibility: "Design System", summary: "Loads Tailwind CSS and defines global visual defaults.", rule: "Use global CSS for tokens and base behavior, not page-specific layout.", tech: ["CSS", "Tailwind CSS"] }
+              ] }
+            ]},
+            { name: "public", type: "folder", size: "18 KB", language: "Static assets", responsibility: "Frontend Assets", summary: "Stores public assets served directly by Next.js.", rule: "Store only files that are safe to expose publicly.", tech: ["SVG", "Images"], children: [] },
+            { name: "package.json", type: "file", size: "532 B", language: "JSON", responsibility: "Frontend Config", summary: "Defines frontend dependencies and development, lint, build, and start commands.", rule: "Keep scripts predictable for local development and CI.", tech: ["npm", "Next.js", "ESLint"] }
+          ]
+        },
+        {
+          name: "backend", type: "folder", size: "210 KB", language: "Python", responsibility: "API Layer",
+          summary: "The trusted FastAPI service responsible for validation, business rules, authorization, and future database access.",
+          rule: "Every protected operation verifies identity and permission inside the API.",
+          tech: ["Python", "FastAPI", "Pydantic", "pytest", "httpx"],
+          children: [
+            { name: "app", type: "folder", size: "8.3 KB", language: "Python", responsibility: "API Application", summary: "Contains FastAPI routes and request-validation schemas.", rule: "Separate routing, schemas, persistence, and reusable business services.", tech: ["FastAPI", "Pydantic"], children: [
+              { name: "main.py", type: "file", size: "1.3 KB", language: "Python", responsibility: "API Layer", summary: "Creates the FastAPI application and exposes health, project creation, and validation routes.", rule: "Route functions orchestrate services without accumulating database complexity.", tech: ["FastAPI", "Python", "HTTP", "async"] },
+              { name: "schemas.py", type: "file", size: "640 B", language: "Python", responsibility: "Validation Layer", summary: "Defines Pydantic models for accepted project input and structured API output.", rule: "Request schemas contain client-owned fields; response schemas may include server-owned IDs.", tech: ["Pydantic", "Python typing"] },
+              { name: "__init__.py", type: "file", size: "0 B", language: "Python", responsibility: "Package Boundary", summary: "Marks app as a Python package and enables package-relative imports.", rule: "Use relative imports for modules within the same application package.", tech: ["Python packages"] }
+            ]},
+            { name: "tests", type: "folder", size: "5.1 KB", language: "Python", responsibility: "Quality Assurance", summary: "Contains unit and API tests for validation, status codes, and response contracts.", rule: "Test public behavior and important failure cases.", tech: ["pytest", "TestClient", "httpx"], children: [
+              { name: "test_main.py", type: "file", size: "3.8 KB", language: "Python", responsibility: "API Testing", summary: "Tests Pydantic models, the health endpoint, and project creation through TestClient.", rule: "Use Arrange, Act, Assert and make each test describe one behavior.", tech: ["pytest", "FastAPI TestClient", "httpx"] }
+            ]},
+            { name: "requirements.txt", type: "file", size: "72 B", language: "Python requirements", responsibility: "Backend Config", summary: "Pins backend runtime and testing dependencies.", rule: "Dependencies should be explicit and reproducible.", tech: ["pip", "FastAPI", "Uvicorn", "pytest", "httpx"] }
+          ]
+        },
+        {
+          name: "docs", type: "folder", size: "54 KB", language: "Markdown / HTML", responsibility: "Architecture Documentation",
+          summary: "Contains the high-level design, architecture explorer, engineering decisions, risks, and delivery guidance.",
+          rule: "Documentation explains decisions and trade-offs that code alone cannot communicate.",
+          tech: ["Markdown", "HTML", "Mermaid"], children: [
+            { name: "high-level-design.html", type: "file", size: "22.8 KB", language: "HTML", responsibility: "System Design", summary: "Documents architecture, data flow, APIs, security, operations, and delivery phases.", rule: "Keep this synchronized with meaningful architecture changes.", tech: ["HTML", "CSS", "Mermaid"] },
+            { name: "decisions.md", type: "file", size: "666 B", language: "Markdown", responsibility: "Decision Log", summary: "Records significant engineering decisions, alternatives, and trade-offs.", rule: "Create a decision record when an important choice would otherwise be forgotten.", tech: ["Markdown", "ADR"] }
+          ]
+        },
+        { name: "Notes.md", type: "file", size: "2.1 KB", language: "Markdown", responsibility: "Learning Notes", summary: "Tracks technologies and concepts encountered while building ResearchHub.", rule: "Record concepts when they appear in real implementation work.", tech: ["Markdown", "FastAPI", "Pydantic", "pytest"] },
+        { name: "README.md", type: "file", size: "1.8 KB", language: "Markdown", responsibility: "Project Documentation", summary: "Introduces the product and provides setup and repository navigation.", rule: "A new contributor should understand and start the project from this file.", tech: ["Markdown"] },
+        { name: ".gitignore", type: "file", size: "480 B", language: "Git configuration", responsibility: "Repository Config", summary: "Excludes generated dependencies, caches, local environments, and secrets.", rule: "Ignore generated and private data, never required source files.", tech: ["Git"] }
+      ]
+    };
+
+    const virtual = {
+      "architecture/database": { name: "PostgreSQL + Supabase", type: "planned", size: "Planned", language: "SQL / PostgreSQL", responsibility: "Database Config", summary: "The planned source of truth for users, projects, memberships, notes, tasks, messages, sources, and AI jobs.", rule: "FastAPI authorization and PostgreSQL Row Level Security protect the same private-project boundary.", tech: ["PostgreSQL", "Supabase", "SQLAlchemy", "Alembic", "RLS"] },
+      "architecture/worker": { name: "AI Worker Pipeline", type: "planned", size: "Planned", language: "Python", responsibility: "Background Processing", summary: "A planned queue and worker for slow AI analysis outside the HTTP request path.", rule: "Jobs require explicit states, bounded retries, safe errors, and idempotency.", tech: ["Python", "Redis", "RQ", "Ollama", "LLM API"] }
+    };
+
+    const nodes = new Map();
+    let activePath = "backend/app/main.py";
+
+    function index(node, parent = "") {
+      const raw = parent ? `${parent}/${node.name}` : node.name;
+      node.path = raw === "ResearchHUB" ? "" : raw.replace(/^ResearchHUB\//, "");
+      nodes.set(node.path, node);
+      (node.children || []).forEach(child => index(child, raw));
+    }
+    index(root);
+    Object.entries(virtual).forEach(([path, node]) => { node.path = path; nodes.set(path, node); });
+
+    const iconFor = node => node.type === "folder" ? icons.folder : node.responsibility === "Database Config" ? icons.database : node.language.includes("Python") || node.language.includes("TypeScript") || node.language === "CSS" || node.language === "HTML" ? icons.code : icons.file;
+    const esc = value => String(value ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+
+    function treeNode(node, depth = 0) {
+      const shell = document.createElement("div");
+      shell.dataset.treePath = node.path;
+      const row = document.createElement("div");
+      row.className = "tree-row relative flex cursor-pointer items-center gap-1 rounded-lg py-1.5 pr-2 text-sm text-slate-400 transition hover:bg-white/[.045] hover:text-slate-200";
+      row.style.paddingLeft = `${8 + depth * 15}px`;
+      row.dataset.select = node.path;
+
+      const toggle = document.createElement("button");
+      toggle.className = node.type === "folder" ? "chevron grid h-5 w-5 shrink-0 place-items-center rounded text-slate-600 hover:bg-white/[.06]" : "h-5 w-5 shrink-0";
+      if (node.type === "folder" && node.children?.length) toggle.innerHTML = `<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 10 5 5 5-5"/></svg>`;
+
+      const icon = document.createElement("span");
+      icon.className = `h-4 w-4 shrink-0 ${node.type === "folder" ? "text-amber-300" : node.language.includes("Python") ? "text-cyan-300" : node.language.includes("TypeScript") ? "text-blue-300" : "text-violet"}`;
+      icon.innerHTML = iconFor(node);
+      const name = document.createElement("span");
+      name.className = "min-w-0 flex-1 truncate";
+      name.textContent = node.name;
+      row.append(toggle, icon, name);
+      shell.append(row);
+
+      if (node.type === "folder" && node.children?.length) {
+        const children = document.createElement("div");
+        children.className = "tree-children";
+        node.children.forEach(child => children.append(treeNode(child, depth + 1)));
+        shell.append(children);
+        toggle.addEventListener("click", event => {
+          event.stopPropagation();
+          children.classList.toggle("collapsed");
+          toggle.classList.toggle("collapsed");
+        });
+      }
+      row.addEventListener("click", () => select(node.path));
+      return shell;
+    }
+
+    function renderTree() {
+      const tree = document.getElementById("tree");
+      tree.replaceChildren(treeNode(root));
+      updateTree();
+    }
+
+    function updateTree() {
+      document.querySelectorAll(".tree-row").forEach(row => row.classList.toggle("selected", row.dataset.select === activePath));
+    }
+
+    function select(path) {
+      const node = nodes.get(path);
+      if (!node) return;
+      activePath = path;
+      updateTree();
+      const parts = node.path ? ["ResearchHUB", ...node.path.split("/")] : ["ResearchHUB"];
+      document.getElementById("breadcrumb").innerHTML = parts.map((part, i) => `<span class="${i === parts.length - 1 ? "text-slate-300" : "text-slate-600"}">${esc(part)}</span>${i < parts.length - 1 ? '<span class="text-slate-700">/</span>' : ""}`).join("");
+      document.getElementById("selectedIcon").innerHTML = iconFor(node);
+      document.getElementById("selectedKind").textContent = node.type === "folder" ? "Directory" : node.type === "planned" ? "Planned component" : "Source file";
+      document.getElementById("selectedName").textContent = node.name;
+      document.getElementById("selectedPath").textContent = node.path || "ResearchHUB";
+      document.getElementById("responsibility").textContent = node.responsibility;
+      document.getElementById("stateBadge").textContent = node.type === "planned" ? "Planned" : "Selected";
+      document.getElementById("details").innerHTML = `
+        <div class="reveal">
+          <p class="max-w-3xl text-sm leading-7 text-slate-300">${esc(node.summary)}</p>
+          <div class="mt-6 grid gap-3 sm:grid-cols-3">
+            ${[
+              ["Type", node.language],
+              ["Size", node.size],
+              [node.type === "folder" ? "Children" : "Dependencies", node.type === "folder" ? (node.children?.length || 0) : "Mapped"]
+            ].map(([label,value]) => `<div class="rounded-xl border border-white/[.07] bg-white/[.025] p-4"><p class="text-[10px] font-semibold uppercase tracking-[.16em] text-slate-600">${esc(label)}</p><p class="mt-2 text-sm font-medium text-slate-200">${esc(value)}</p></div>`).join("")}
+          </div>
+          <div class="mt-6 rounded-xl border border-mint/10 bg-mint/[.035] p-4">
+            <p class="text-sm font-medium text-slate-200">Architectural responsibility</p>
+            <p class="mt-1 text-sm leading-6 text-slate-400">${esc(node.responsibility)}</p>
+          </div>
+        </div>`;
+      document.getElementById("metadata").innerHTML = [
+        ["File size", node.size],
+        ["Language", node.language],
+        ["Type", node.type === "folder" ? "Directory" : node.type === "planned" ? "Planned service" : "Source file"],
+        ["Responsibility", node.responsibility]
+      ].map(([label,value]) => `<div class="flex items-start justify-between gap-4 border-b border-white/[.055] pb-3 last:border-0"><dt class="text-xs text-slate-600">${esc(label)}</dt><dd class="max-w-[185px] text-right text-xs font-medium text-slate-300">${esc(value)}</dd></div>`).join("");
+      document.getElementById("tech").innerHTML = (node.tech || []).map((item,i) => `<span class="rounded-lg border ${i % 2 ? "border-violet/15 bg-violet/[.06] text-violet" : "border-mint/15 bg-mint/[.06] text-teal-200"} px-2.5 py-1.5 text-[11px] font-medium">${esc(item)}</span>`).join("");
+      document.getElementById("rule").textContent = node.rule;
+      highlightMap(node);
+    }
+
+    function highlightMap(node) {
+      let target = {
+        "frontend": "frontend",
+        "frontend/src/app/page.tsx": "frontend",
+        "backend/app/main.py": "api",
+        "backend/app/schemas.py": "schemas",
+        "backend/tests/test_main.py": "tests",
+        "architecture/database": "database",
+        "architecture/worker": "worker"
+      }[node.path];
+      if (!target && node.path?.startsWith("frontend")) target = "frontend";
+      if (!target && node.path?.startsWith("backend/tests")) target = "tests";
+      if (!target && node.path?.startsWith("backend/app")) target = "api";
+      document.querySelectorAll(".map-node").forEach(item => {
+        const match = target && item.dataset.map === target;
+        item.classList.toggle("active", match);
+        item.classList.toggle("dimmed", Boolean(target) && !match);
+      });
+    }
+
+    document.getElementById("search").addEventListener("input", event => {
+      const query = event.target.value.trim().toLowerCase();
+      document.querySelectorAll("[data-tree-path]").forEach(item => item.hidden = Boolean(query) && !item.dataset.treePath.toLowerCase().includes(query));
+      if (query) {
+        document.querySelectorAll(".tree-children").forEach(item => item.classList.remove("collapsed"));
+        document.querySelectorAll(".chevron").forEach(item => item.classList.remove("collapsed"));
+      }
+    });
+    document.getElementById("collapseAll").addEventListener("click", () => {
+      document.querySelectorAll(".tree-children").forEach(item => item.classList.add("collapsed"));
+      document.querySelectorAll(".chevron").forEach(item => item.classList.add("collapsed"));
+    });
+    document.querySelectorAll(".map-node").forEach(item => {
+      const open = () => select(item.dataset.path);
+      item.addEventListener("click", open);
+      item.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+      });
+    });
+
+    renderTree();
+    select(activePath);
+  </script>
+</body>
+</html>

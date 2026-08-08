@@ -1,0 +1,35 @@
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at top right, #173955 0, transparent 38%), #0e141b;
+}
+
+.card {
+  width: min(100%, 620px);
+  padding: 36px;
+  border: 1px solid #2d4151;
+  border-radius: 8px;
+  background: #121b24;
+  box-shadow: 0 25px 55px #0007;
+}
+
+.eyebrow { margin: 0; color: #66aef1; font-size: 11px; font-weight: 700; letter-spacing: .12em; }
+.card h1 { margin: 9px 0 8px; font-size: 28px; font-weight: 500; }
+.intro { margin: 0 0 26px; color: #9dacb9; font-size: 13px; line-height: 1.5; }
+.form { display: grid; gap: 17px; }
+.form label { display: grid; gap: 7px; color: #d7e0e8; font-size: 12px; }
+.form label small { color: #8495a5; font-weight: 400; }
+.form input, .form textarea, .form select { width: 100%; border: 1px solid #314654; border-radius: 5px; outline: 0; background: #0e161e; color: #f5f8fa; padding: 10px; }
+.form input:focus, .form textarea:focus, .form select:focus { border-color: #2589ef; box-shadow: 0 0 0 2px #2589ef33; }
+.form textarea { min-height: 125px; resize: vertical; }
+.submit { justify-self: start; border: 0; border-radius: 5px; background: #176fe1; color: white; padding: 10px 15px; font-size: 12px; cursor: pointer; }
+.submit:disabled { cursor: wait; opacity: .7; }
+.message { margin: 20px 0 0; padding: 10px 12px; border-radius: 5px; font-size: 12px; }
+.success { color: #cbef7b; background: #263c13; border: 1px solid #547822; }
+.error { color: #ffc1bd; background: #44211f; border: 1px solid #81413a; }
+.backLink { display: inline-block; margin-top: 22px; color: #71b6f4; font-size: 12px; text-decoration: none; }
+.backLink:hover { text-decoration: underline; }
+
+@media (max-width: 600px) { .card { padding: 24px; } }

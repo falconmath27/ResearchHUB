@@ -1,5 +1,6 @@
 # Python
 backend/.venv/
+backend/researchhub.db
 __pycache__/
 *.py[cod]
 .pytest_cache/
