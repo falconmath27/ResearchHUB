@@ -1,0 +1,44 @@
+.page { min-height: 100vh; padding: 42px 24px; background: radial-gradient(circle at top right, #173955 0, transparent 38%), #0e141b; }
+.shell { width: min(100%, 980px); margin: auto; }
+.back { color: #71b6f4; font-size: 12px; text-decoration: none; }
+.back:hover { text-decoration: underline; }
+.header { margin: 28px 0; }
+.header p { margin: 0; color: #66aef1; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.header h1 { margin: 8px 0; font-size: 30px; font-weight: 500; }
+.header span, .empty { color: #9dacb9; font-size: 13px; }
+.form { display: grid; gap: 12px; border: 1px solid #2d4151; border-radius: 8px; background: #121b24; padding: 20px; }
+.form h2 { margin: 0; font-size: 16px; font-weight: 500; }
+.form input, .form select, .libraryHeader select { min-width: 0; border: 1px solid #314654; border-radius: 5px; outline: 0; background: #0e161e; color: #f5f8fa; padding: 10px; }
+.form input:focus, .form select:focus, .libraryHeader select:focus { border-color: #2589ef; box-shadow: 0 0 0 2px #2589ef33; }
+.twoColumns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form button, .sourceCard button, .projectFiles button { border: 0; border-radius: 5px; background: #176fe1; color: white; padding: 8px 11px; font-size: 11px; cursor: pointer; }
+.form button:disabled, .uploadButton:has(input:disabled) { cursor: wait; opacity: .7; }
+.cancel, .sourceCard .danger, .projectFiles .danger { margin-left: 8px; background: #2d3b46 !important; }
+.danger { background: #432422 !important; color: #ffc1bd !important; }
+.libraryHeader { display: flex; align-items: end; justify-content: space-between; margin: 30px 0 16px; }
+.libraryHeader h2, .projectFiles h2 { margin: 0; font-size: 20px; font-weight: 500; }
+.libraryHeader label { display: grid; gap: 6px; color: #a7b5c1; font-size: 11px; }
+.sourceList { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.sourceCard { display: flex; min-height: 300px; flex-direction: column; border: 1px solid #2d4151; border-radius: 8px; background: #121b24; padding: 17px; }
+.cardHeader { display: flex; justify-content: space-between; color: #70b8ed; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.cardHeader small { color: #a4b5c1; }
+.sourceCard h3 { margin: 17px 0 7px; font-size: 16px; font-weight: 500; }
+.authors { margin: 0; color: #a7b5c1; font-size: 12px; line-height: 1.5; }
+.sourceCard > a { margin-top: 13px; color: #80c0f0; font-size: 12px; text-decoration: none; }
+.attachments { margin-top: 16px; border-top: 1px solid #263946; padding-top: 12px; }
+.attachmentsHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #dce8f0; font-size: 11px; }
+.uploadButton { border: 1px solid #3a607a; border-radius: 5px; color: #93d1f6; cursor: pointer; font-size: 10px; padding: 6px 8px; }
+.uploadButton input { display: none; }
+.attachments p, .projectFiles > p { margin: 9px 0 0; color: #80919f; font-size: 11px; }
+.attachments ul, .projectFiles ul { display: grid; gap: 7px; margin: 10px 0 0; padding: 0; list-style: none; }
+.attachments li, .projectFiles li { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-radius: 5px; background: #0e161e; padding: 8px; }
+.attachments li span, .projectFiles li span { display: grid; min-width: 0; gap: 3px; }
+.attachments li b, .projectFiles li b { overflow: hidden; color: #cbdce8; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.attachments li small, .projectFiles li small { color: #758896; font-size: 10px; }
+.attachments li button, .projectFiles li button { padding: 5px 7px; font-size: 10px; }
+.sourceCard footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 18px; }
+.sourceCard time { color: #80919f; font-size: 10px; }
+.notice { color: #ffc1bd; font-size: 12px; }
+.empty { margin: 18px 0; }
+.projectFiles { margin-top: 28px; border: 1px solid #2d4151; border-radius: 8px; background: #121b24; padding: 18px; }
+@media (max-width: 600px) { .page { padding: 28px 16px; } .twoColumns { grid-template-columns: 1fr; } .libraryHeader { align-items: start; flex-direction: column; gap: 12px; } .sourceCard footer { align-items: start; flex-direction: column; } .attachments li, .projectFiles li { align-items: start; flex-direction: column; } }

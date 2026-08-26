@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { apiFetch } from "../../lib/api";
 import styles from "./page.module.css";
 
 type Project = {
@@ -12,8 +13,6 @@ type Project = {
   tags: string[];
   visibility: "private" | "public";
 };
-
-const API_URL = "http://localhost:8000/projects";
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -30,7 +29,12 @@ export default function ProjectsPage() {
         const searchParams = new URLSearchParams();
         if (visibility !== "all") searchParams.set("visibility", visibility);
         if (tag.trim()) searchParams.set("tag", tag.trim());
-        const response = await fetch(`${API_URL}${searchParams.size ? `?${searchParams}` : ""}`);
+        const response = await apiFetch(`/projects${searchParams.size ? `?${searchParams}` : ""}`);
+
+        if (response.status === 401 || response.status === 403) {
+          setErrorMessage("Sign in to view your projects.");
+          return;
+        }
 
         if (!response.ok) {
           throw new Error("The API could not load projects.");
@@ -56,7 +60,10 @@ export default function ProjectsPage() {
             <h1>Your projects</h1>
             <p>Projects saved through the ResearchHub API.</p>
           </div>
-          <Link className={styles.createLink} href="/projects/new">Create project</Link>
+          <div className={styles.headerLinks}>
+            <Link className={styles.signInLink} href="/auth">Sign in</Link>
+            <Link className={styles.createLink} href="/projects/new">Create project</Link>
+          </div>
         </header>
 
         <section className={styles.filters} aria-label="Project filters">

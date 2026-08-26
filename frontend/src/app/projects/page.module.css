@@ -5,6 +5,9 @@
 .header h1 { margin: 9px 0 8px; font-size: 30px; font-weight: 500; }
 .header p:not(.eyebrow) { margin: 0; color: #9dacb9; font-size: 13px; }
 .createLink { flex: none; border-radius: 5px; background: #176fe1; color: white; padding: 10px 15px; font-size: 12px; text-decoration: none; }
+.headerLinks { display: flex; gap: 12px; align-items: center; }
+.signInLink { color: #9fc7ec; font-size: 12px; text-decoration: none; }
+.signInLink:hover { text-decoration: underline; }
 .filters { display: flex; gap: 12px; margin-bottom: 22px; }
 .filters label { display: grid; gap: 6px; color: #aab9c6; font-size: 11px; }
 .filters input, .filters select { min-width: 180px; border: 1px solid #314654; border-radius: 5px; outline: 0; background: #121b24; color: #f1f5f9; padding: 8px; font-size: 12px; }

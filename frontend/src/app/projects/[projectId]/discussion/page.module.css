@@ -1,0 +1,26 @@
+.page { min-height: 100vh; padding: 42px 24px; background: radial-gradient(circle at top right, #173955 0, transparent 38%), #0e141b; }
+.shell { width: min(100%, 860px); margin: auto; }
+.back { color: #71b6f4; font-size: 12px; text-decoration: none; }
+.back:hover { text-decoration: underline; }
+.header { margin: 28px 0; }
+.header p { margin: 0; color: #66aef1; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.header h1 { margin: 8px 0; font-size: 30px; font-weight: 500; }
+.header span, .empty { color: #9dacb9; font-size: 13px; }
+.composer { display: grid; gap: 10px; border: 1px solid #2d4151; border-radius: 8px; background: #121b24; padding: 20px; }
+.composer label { color: #d7e0e8; font-size: 12px; }
+.composer textarea { min-height: 110px; resize: vertical; border: 1px solid #314654; border-radius: 5px; outline: 0; background: #0e161e; color: #f5f8fa; padding: 10px; }
+.composer textarea:focus { border-color: #2589ef; box-shadow: 0 0 0 2px #2589ef33; }
+.composer button { justify-self: start; border: 0; border-radius: 5px; background: #176fe1; color: white; padding: 9px 13px; font-size: 12px; cursor: pointer; }
+.composer button:disabled { cursor: wait; opacity: .7; }
+.notice { margin: 18px 0; color: #ffc1bd; font-size: 12px; }
+.empty { margin-top: 22px; }
+.feed { display: grid; gap: 12px; margin-top: 24px; }
+.messageCard { display: flex; gap: 12px; border: 1px solid #2d4151; border-radius: 8px; background: #121b24; padding: 16px; }
+.avatar { display: grid; width: 30px; height: 30px; flex: none; place-items: center; border-radius: 50%; background: #79a9d8; color: #071018; font-size: 10px; font-weight: 700; }
+.messageBody { min-width: 0; flex: 1; }
+.messageBody header { display: flex; gap: 9px; align-items: baseline; }
+.messageBody strong { color: #f1f5f9; font-size: 13px; }
+.messageBody time { color: #8292a0; font-size: 10px; }
+.messageBody p { margin: 8px 0 0; color: #bac6d0; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+
+@media (max-width: 600px) { .page { padding: 28px 16px; } .messageBody header { align-items: start; flex-direction: column; gap: 2px; } }

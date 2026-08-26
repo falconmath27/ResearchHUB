@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
+import { apiFetch } from "../../../lib/api";
 import styles from "./page.module.css";
 
 type Project = {
@@ -27,7 +28,12 @@ export default function ProjectDetailPage() {
   useEffect(() => {
     async function loadProject() {
       try {
-        const response = await fetch(`http://localhost:8000/projects/${projectId}`);
+        const response = await apiFetch(`/projects/${projectId}`);
+
+        if (response.status === 401 || response.status === 403) {
+          setErrorMessage("Sign in to view this project.");
+          return;
+        }
 
         if (response.status === 404) {
           setErrorMessage("This project does not exist.");
@@ -66,7 +72,7 @@ export default function ProjectDetailPage() {
     };
 
     try {
-      const response = await fetch(`http://localhost:8000/projects/${projectId}`, {
+      const response = await apiFetch(`/projects/${projectId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updatedProject),
@@ -93,7 +99,7 @@ export default function ProjectDetailPage() {
     setErrorMessage("");
 
     try {
-      const response = await fetch(`http://localhost:8000/projects/${projectId}`, { method: "DELETE" });
+      const response = await apiFetch(`/projects/${projectId}`, { method: "DELETE" });
 
       if (!response.ok) throw new Error("Could not delete the project.");
 
@@ -132,6 +138,10 @@ export default function ProjectDetailPage() {
             <section className={styles.section}>
               <h2>Tags</h2>
               {project.tags.length > 0 ? <div className={styles.tags}>{project.tags.map((tag) => <em key={tag}>{tag}</em>)}</div> : <p>No tags have been added.</p>}
+            </section>
+            <section className={styles.section}>
+              <h2>Workspace</h2>
+              <p><Link href={`/projects/${projectId}/notes`}>Research notes</Link> &nbsp; | &nbsp; <Link href={`/projects/${projectId}/tasks`}>Task board</Link> &nbsp; | &nbsp; <Link href={`/projects/${projectId}/sources`}>Source library</Link> &nbsp; | &nbsp; <Link href={`/projects/${projectId}/discussion`}>Team discussion</Link></p>
             </section>
           </article>
         )}

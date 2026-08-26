@@ -2,9 +2,8 @@
 
 import { FormEvent, useState } from "react";
 import Link from "next/link";
+import { apiFetch } from "../../../lib/api";
 import styles from "./page.module.css";
-
-const API_URL = "http://localhost:8000/projects";
 
 export default function NewProjectPage() {
   const [title, setTitle] = useState("");
@@ -23,7 +22,7 @@ export default function NewProjectPage() {
     setErrorMessage("");
 
     try {
-      const response = await fetch(API_URL, {
+      const response = await apiFetch("/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -95,6 +94,7 @@ export default function NewProjectPage() {
         {status === "success" && <p className={`${styles.message} ${styles.success}`}>Project created successfully.</p>}
         {status === "error" && <p className={`${styles.message} ${styles.error}`}>{errorMessage}</p>}
         <Link className={styles.backLink} href="/projects">View all projects</Link>
+        <Link className={styles.authLink} href="/auth">Register or sign in</Link>
       </section>
     </main>
   );

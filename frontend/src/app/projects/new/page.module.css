@@ -29,7 +29,8 @@
 .message { margin: 20px 0 0; padding: 10px 12px; border-radius: 5px; font-size: 12px; }
 .success { color: #cbef7b; background: #263c13; border: 1px solid #547822; }
 .error { color: #ffc1bd; background: #44211f; border: 1px solid #81413a; }
-.backLink { display: inline-block; margin-top: 22px; color: #71b6f4; font-size: 12px; text-decoration: none; }
-.backLink:hover { text-decoration: underline; }
+.backLink, .authLink { display: inline-block; margin-top: 22px; color: #71b6f4; font-size: 12px; text-decoration: none; }
+.authLink { margin-left: 18px; }
+.backLink:hover, .authLink:hover { text-decoration: underline; }
 
 @media (max-width: 600px) { .card { padding: 24px; } }
