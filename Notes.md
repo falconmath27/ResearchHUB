@@ -394,7 +394,7 @@ The source library stores reference metadata separately from uploaded files. A `
 ### Tradeoffs and Future Improvements
 
 - **Authors are a single text field:** this is fast for a research MVP and handles organizations, but it does not support author-specific search or normalized identities. A future `source_authors` table would support ordered authors, ORCID IDs, and better citation export.
-- **No DOI field yet:** the URL handles general web references. Add a normalized DOI field and a citation-parser integration once citation import becomes a priority.
+- **No automatic metadata import yet:** DOI values now identify publications reliably, but users still enter titles, authors, and years themselves. A future Crossref or OpenAlex integration could resolve a DOI into citation metadata while retaining a review step before saving external data.
 - **No file record yet:** the following upload feature should create an attachment table that points to `source_id`, rather than putting filesystem details directly on the source row.
 
 Interview answer: “I treated sources as project-scoped metadata independent from file storage. That keeps citations reusable, supports external links and datasets, and gives us a clean attachment boundary for the next feature. I used controlled source types and a composite index because filtering the source library is a primary access pattern.”
@@ -421,3 +421,85 @@ The source library now follows a Zotero-inspired model: a source is the citation
 - **Indexing:** the attachment migration adds an index on `(project_id, source_id)`, matching the common query of loading files for one source in one project.
 
 Interview answer: “I kept citation metadata and binary evidence separate, similar to a reference manager. Attachments are project-scoped and authorization is checked before every list or download. For the MVP I stream allowed files to local storage with generated names and a size cap; in production I would replace local disk with private object storage, malware scanning, signed URLs, and a cleanup workflow for database-to-object-store consistency.”
+
+## Source Search and DOI Identity
+
+The source library now supports project-scoped text search and normalized Digital Object Identifiers (DOIs). This turns the library from a list users must scan manually into a searchable research catalogue and gives academic publications a stable identity independent of a publisher URL.
+
+- **Composable search:** `GET /projects/{project_id}/sources?q=...&source_type=...` searches source titles, authors or organizations, and DOIs without case sensitivity. The text query and controlled source-type filter can be used separately or together. Filtering remains in SQL, so the API does not load a project's full source library and filter it in Python.
+- **Authorization boundary:** search uses the existing protected source-list endpoint. The API verifies project membership before running the query, so search cannot be used to discover metadata from a private project.
+- **Literal substring behavior:** `%`, `_`, and the escape character are escaped before building the SQL `LIKE` pattern. Users therefore search for literal text instead of accidentally supplying SQL wildcard behavior. Bound SQLAlchemy parameters continue to protect the query from SQL injection.
+- **Canonical DOI storage:** the API accepts a bare DOI, a `doi:` value, or `doi.org` and legacy `dx.doi.org` URLs. It trims the input, removes the resolver prefix, and lowercases the result before persistence. For example, `https://doi.org/10.1000/Example` becomes `10.1000/example`.
+- **Boundary validation:** DOI validation requires the standard `10.` registrant prefix, four to nine registrant digits, a slash, and a non-whitespace suffix. Blank input becomes `NULL`, keeping DOI optional for websites, local reports, and other material without one.
+- **Project-scoped uniqueness:** a database unique constraint on `(project_id, doi)` prevents the same publication from being catalogued twice in one project while allowing separate projects to maintain independent libraries. SQLite and PostgreSQL both permit multiple `NULL` DOI values, so sources without a DOI remain valid.
+- **Concurrency safety:** request validation gives users early feedback, while the database constraint is the final authority if two requests try to insert the same DOI concurrently. The API rolls back the failed transaction and returns `409 Conflict` with a useful duplicate message.
+- **Responsive frontend search:** the source page waits 300 milliseconds after typing before requesting results. This debounce keeps typing responsive and avoids sending one API request for every keystroke. The page includes distinct searching, no-library-data, no-search-results, validation-error, and duplicate-DOI states.
+- **Resolvable DOI links:** stored canonical values are displayed as links to `https://doi.org/{doi}`. A normal source URL remains separate because it may point to a dataset, project page, preprint, or supplementary material rather than the DOI resolver.
+
+### System-Design Tradeoffs, Risks, and Mitigations
+
+- **Substring search before full-text search:** `ILIKE '%term%'` is simple, portable across the local SQLite setup and production PostgreSQL, and sufficient for the current project-sized dataset. A normal B-tree index cannot efficiently serve a leading-wildcard query, so very large libraries should move to PostgreSQL full-text search or trigram indexes, ranked results, and pagination.
+- **Normalization versus exact representation:** lowercasing and removing resolver prefixes makes equality checks and duplicate prevention predictable. ResearchHub preserves the DOI identity rather than the user's original formatting; this is intentional because display links can be reconstructed from the canonical value.
+- **Practical validation rather than registry verification:** the API checks DOI syntax but does not make a network call to prove that the DOI currently resolves. This keeps source creation fast and available offline. Future metadata import can verify resolution asynchronously and show a warning without blocking users from recording valid-but-temporarily-unavailable research.
+- **Database constraint over application-only checks:** checking duplicates only in route code would have a race condition. The composite unique constraint guarantees the invariant under concurrent writes; the API converts the expected integrity failure into a domain-level `409` response.
+- **Search request races:** React cancels the effect's state update when the filter or debounced query changes. A slower response for an older query therefore cannot overwrite newer visible results, even though the underlying HTTP request may still finish.
+
+Interview answer: “I added normalized, project-scoped DOI identity and composable source search. DOI normalization makes duplicate detection deterministic, while a composite database constraint protects the invariant under concurrency. Search runs behind the existing membership boundary and uses escaped, parameterized substring matching for a portable MVP. At larger scale I would move PostgreSQL to trigram or full-text indexes, ranked results, and pagination.”
+
+Migration `20260915_0008` adds the nullable DOI column and `(project_id, doi)` unique constraint. Source-specific coverage includes DOI normalization, invalid DOI rejection, duplicate conflict handling, and search across title, author, and DOI combined with source-type filtering.
+
+## Authentication UX Reliability
+
+The authentication screen now distinguishes credential, validation, and connectivity failures instead of making a failed submission look like an inactive button.
+
+- Switching between Register and Sign in clears an error from the previous mode, preventing stale feedback from appearing to belong to the new form.
+- FastAPI validation details are converted into readable text instead of rendering as an unhelpful object value.
+- A network failure explicitly tells the developer to check the backend on port 8000, while incorrect credentials retain the safer generic authentication response.
+- The frontend API origin can be overridden with `NEXT_PUBLIC_API_BASE_URL`; the localhost default remains zero-configuration for development.
+- FastAPI accepts the two equivalent local browser origins, `localhost:3000` and `127.0.0.1:3000`. Production should replace these development origins with the deployed frontend origin rather than allowing every origin.
+- Mode buttons expose `aria-pressed`, and authentication inputs include appropriate autocomplete metadata for clearer assistive-technology and password-manager behavior.
+
+Interview answer: “I treated authentication errors as part of the API contract, not just styling. The UI separates server validation, rejected credentials, and an unreachable API, clears stale state when modes change, and keeps CORS narrowly allow-listed to known development origins.”
+
+## Password Reset and Manual Account Recovery
+
+ResearchHub now separates two account-loss scenarios instead of treating them as the same problem. A user who knows their registered email can reset their password with a short-lived token. A user who cannot remember or access that email can create a manual support case, but the public recovery flow never reveals an account email or grants access automatically.
+
+### Password Reset Workflow
+
+- `POST /auth/password-reset/request` always returns `202 Accepted` and the same message for registered and unregistered emails. This prevents attackers from using the endpoint to enumerate ResearchHub accounts.
+- The backend generates reset tokens with a cryptographically secure random generator. Only a SHA-256 hash is stored in `password_reset_tokens`; possession of the database alone does not reveal a usable reset link.
+- Reset tokens expire after 30 minutes and are single-use. Requesting another token invalidates previous unused tokens for that account, reducing the window created by old emails or copied links.
+- The reset page reads the token once and removes it from the visible URL and browser history. This reduces accidental disclosure through copied URLs, screenshots, analytics, or referrer headers.
+- `POST /auth/password-reset/confirm` changes the Argon2 password hash and consumes every outstanding token for that user in the same database transaction. Invalid, expired, or previously used tokens receive one generic failure response.
+- Requests are limited to three token issuances per email fingerprint per hour. The fingerprint is an HMAC made with the server secret, so unknown email addresses do not need to be stored in plaintext merely to enforce rate limits. Rate-limited requests still receive the same public response.
+- In local `development` delivery mode, the API returns a reset URL so the complete flow can be demonstrated without an email account. Even unknown emails receive a plausible but unusable development token, preserving response-shape privacy.
+- `PASSWORD_RESET_DELIVERY_MODE=email` removes the token from the response and fails closed. A production deployment must connect a transactional email provider before enabling this mode; reset tokens must never be logged or returned to a production browser.
+
+### Session Revocation
+
+Each user now has a `token_version`. JWTs carry the version that existed when the session was created, and protected routes compare it with the current database value.
+
+- A successful password reset increments `token_version`, immediately invalidating every older access token for that account.
+- This adds one user lookup to authenticated requests, which the application already performed to verify that the user still exists.
+- The design revokes all sessions rather than tracking individual devices. Device-level session management would require server-side session records or refresh-token families and is a future improvement.
+
+### Manual Support-Assisted Recovery
+
+- `POST /auth/account-recovery` accepts the user's name, a reachable contact email, an optional remembered account email, and a minimum amount of context for manual verification.
+- The response contains a high-entropy reference code such as `RH-...`. The requester can check case status with the reference code plus the contact email; knowing only a reference code is insufficient.
+- Cases begin in `pending` and support can move them through `in_review`, `resolved`, or `rejected`. The current MVP deliberately has no public endpoint that changes status or account credentials.
+- Support must verify ownership using evidence appropriate to the organization, such as previously known project membership, institutional identity, or a verified secondary channel. A matching name or remembered email alone must never be treated as proof.
+- Manual recovery records contain personal information. Production needs a restricted support console, audit logs for operator actions, encrypted storage where appropriate, retention/deletion rules, and access limited to trained support staff. Until that operator boundary exists, cases remain safe pending records rather than automatic recovery grants.
+
+### Tradeoffs, Risks, and Mitigations
+
+- **Email delivery is an adapter boundary:** secure token creation and consumption are implemented, but ResearchHub intentionally does not fake production delivery. A provider such as Amazon SES, Postmark, or Resend should be integrated through a background job with retry and delivery-event handling.
+- **Database-backed rate limiting:** it works across multiple API instances and survives restarts, unlike an in-memory counter. Old attempt rows need periodic retention cleanup; an API gateway or Redis limiter should additionally enforce per-IP and global abuse controls.
+- **Hashing reset tokens:** random high-entropy tokens do not require slow password hashing, so SHA-256 is appropriate and efficient. Passwords still use Argon2 because human-created passwords have far less entropy and need expensive hashing.
+- **Manual recovery avoids unsafe automation:** account recovery is slower for a user who lost their email, but it avoids an automated flow that could disclose private accounts or let weak biographical guesses take over a workspace.
+- **Reference-code status lookup:** requiring both the random code and contact email provides practical case tracking. Production should also expire or archive old cases and avoid putting sensitive case details in the status response.
+
+Interview answer: “I split password reset from identity recovery. Password reset uses enumeration-safe responses, rate-limited requests, hashed single-use tokens, expiration, and a token-version change that revokes old JWTs. Losing the email becomes a manual support case with a high-entropy reference code; it never automatically reveals or transfers the account. The email provider and restricted support console remain explicit production boundaries rather than insecure shortcuts.”
+
+Migration `20260915_0009` adds token-version session revocation, reset-attempt fingerprints, password-reset tokens, and manual recovery requests. The backend suite has 62 passing tests. Targeted authentication lint and the optimized frontend build pass, including the new `/auth/reset` route.

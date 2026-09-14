@@ -1,4 +1,9 @@
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
+import secrets
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from .schemas import (
     Project,
@@ -27,14 +32,27 @@ from .schemas import (
     User,
     UserCreate,
     UserLogin,
+    AccountRecoveryCreate,
+    AccountRecoveryResult,
+    AccountRecoveryStatus,
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    PasswordResetRequestResult,
 )
 from typing import Literal
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 
+from .config import (
+    JWT_SECRET_KEY,
+    PASSWORD_RESET_DELIVERY_MODE,
+    PASSWORD_RESET_EXPIRE_MINUTES,
+    PASSWORD_RESET_MAX_REQUESTS_PER_HOUR,
+)
 from .database import SessionLocal
-from .models import AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from .models import AccountRecoveryRequestRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
 from fastapi.middleware.cors import CORSMiddleware
-from .security import hash_password,create_access_token,verify_password,get_user_id_from_token
+from .security import create_access_token, get_access_token_identity, hash_password, verify_password
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .storage import attachment_file_path, delete_upload, save_upload
 
@@ -42,7 +60,7 @@ app = FastAPI(title="ResearchHub API", version="0.1.0")
 bearer_scheme = HTTPBearer()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,13 +89,15 @@ def user_to_response(record: UserRecord) -> User:
 def get_authenticated_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> UserRecord:
-    user_id = get_user_id_from_token(credentials.credentials)
+    user_id, token_version = get_access_token_identity(credentials.credentials)
 
     with SessionLocal() as session:
         record = session.get(UserRecord, user_id)
 
         if record is None:
             raise HTTPException(status_code=401, detail="User no longer exists.")
+        if record.token_version != token_version:
+            raise HTTPException(status_code=401, detail="This session is no longer valid.")
 
         session.expunge(record)
         return record
@@ -199,6 +219,7 @@ def source_to_response(record: SourceRecord) -> Source:
         publication_year=record.publication_year,
         source_type=record.source_type,
         url=record.url,
+        doi=record.doi,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -808,9 +829,17 @@ async def create_source(
             publication_year=payload.publication_year,
             source_type=payload.source_type,
             url=str(payload.url) if payload.url is not None else None,
+            doi=payload.doi,
         )
         session.add(record)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="A source with this DOI already exists in this project.",
+            )
         session.refresh(record)
         return source_to_response(record)
 
@@ -819,6 +848,7 @@ async def create_source(
 async def list_sources(
     project_id: int,
     source_type: SourceType | None = None,
+    q: str | None = Query(default=None, max_length=200),
     current_user: UserRecord = Depends(get_authenticated_user),
 ) -> list[Source]:
     with SessionLocal() as session:
@@ -829,6 +859,17 @@ async def list_sources(
         statement = select(SourceRecord).where(SourceRecord.project_id == project_id)
         if source_type is not None:
             statement = statement.where(SourceRecord.source_type == source_type)
+        search_text = q.strip() if q is not None else ""
+        if search_text:
+            escaped_search = (
+                search_text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            pattern = f"%{escaped_search}%"
+            statement = statement.where(or_(
+                SourceRecord.title.ilike(pattern, escape="\\"),
+                SourceRecord.authors.ilike(pattern, escape="\\"),
+                SourceRecord.doi.ilike(pattern, escape="\\"),
+            ))
         records = session.scalars(statement.order_by(SourceRecord.updated_at.desc())).all()
         return [source_to_response(record) for record in records]
 
@@ -851,7 +892,15 @@ async def update_source(
         record.publication_year = payload.publication_year
         record.source_type = payload.source_type
         record.url = str(payload.url) if payload.url is not None else None
-        session.commit()
+        record.doi = payload.doi
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="A source with this DOI already exists in this project.",
+            )
         session.refresh(record)
         return source_to_response(record)
 
@@ -980,6 +1029,153 @@ async def delete_attachment(
         session.commit()
         delete_upload(stored_filename)
 
+
+PASSWORD_RESET_RESPONSE = (
+    "If an account exists for that email, password reset instructions are available."
+)
+
+
+def hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def email_fingerprint(email: str) -> str:
+    return hmac.new(
+        JWT_SECRET_KEY.encode("utf-8"),
+        email.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+@app.post("/auth/password-reset/request", status_code=202, response_model=PasswordResetRequestResult)
+async def request_password_reset(payload: PasswordResetRequest) -> PasswordResetRequestResult:
+    now = datetime.now(timezone.utc)
+    raw_token = secrets.token_urlsafe(32)
+    fingerprint = email_fingerprint(str(payload.email))
+
+    with SessionLocal() as session:
+        recent_attempts = session.scalar(
+            select(func.count(PasswordResetAttemptRecord.id)).where(
+                PasswordResetAttemptRecord.email_fingerprint == fingerprint,
+                PasswordResetAttemptRecord.created_at >= now - timedelta(hours=1),
+            )
+        ) or 0
+        session.add(PasswordResetAttemptRecord(email_fingerprint=fingerprint))
+
+        user = session.scalar(
+            select(UserRecord).where(func.lower(UserRecord.email) == str(payload.email))
+        )
+        if user is not None and recent_attempts < PASSWORD_RESET_MAX_REQUESTS_PER_HOUR:
+            session.execute(
+                update(PasswordResetTokenRecord)
+                .where(
+                    PasswordResetTokenRecord.user_id == user.id,
+                    PasswordResetTokenRecord.used_at.is_(None),
+                )
+                .values(used_at=now)
+            )
+            session.add(PasswordResetTokenRecord(
+                user_id=user.id,
+                token_hash=hash_reset_token(raw_token),
+                expires_at=now + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES),
+            ))
+        session.commit()
+
+    development_url = None
+    if PASSWORD_RESET_DELIVERY_MODE == "development":
+        development_url = f"http://localhost:3000/auth/reset?token={raw_token}"
+    return PasswordResetRequestResult(
+        message=PASSWORD_RESET_RESPONSE,
+        development_reset_url=development_url,
+    )
+
+
+@app.post("/auth/password-reset/confirm", status_code=204)
+async def confirm_password_reset(payload: PasswordResetConfirm) -> None:
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        reset_token = session.scalar(
+            select(PasswordResetTokenRecord).where(
+                PasswordResetTokenRecord.token_hash == hash_reset_token(payload.token),
+                PasswordResetTokenRecord.used_at.is_(None),
+            )
+        )
+        if reset_token is None or as_utc(reset_token.expires_at) <= now:
+            raise HTTPException(status_code=400, detail="Reset link is invalid or has expired.")
+
+        user = session.get(UserRecord, reset_token.user_id)
+        if user is None:
+            raise HTTPException(status_code=400, detail="Reset link is invalid or has expired.")
+
+        user.password_hash = hash_password(payload.new_password)
+        user.token_version += 1
+        session.execute(
+            update(PasswordResetTokenRecord)
+            .where(
+                PasswordResetTokenRecord.user_id == user.id,
+                PasswordResetTokenRecord.used_at.is_(None),
+            )
+            .values(used_at=now)
+        )
+        session.commit()
+
+
+@app.post("/auth/account-recovery", status_code=202, response_model=AccountRecoveryResult)
+async def create_account_recovery(payload: AccountRecoveryCreate) -> AccountRecoveryResult:
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        recent_requests = session.scalar(
+            select(func.count(AccountRecoveryRequestRecord.id)).where(
+                func.lower(AccountRecoveryRequestRecord.contact_email) == str(payload.contact_email),
+                AccountRecoveryRequestRecord.created_at >= now - timedelta(hours=1),
+            )
+        ) or 0
+        if recent_requests >= PASSWORD_RESET_MAX_REQUESTS_PER_HOUR:
+            raise HTTPException(status_code=429, detail="Too many recovery requests. Try again later.")
+
+        record = AccountRecoveryRequestRecord(
+            reference_code=f"RH-{secrets.token_hex(8).upper()}",
+            name=payload.name.strip(),
+            contact_email=str(payload.contact_email),
+            remembered_email=(
+                str(payload.remembered_email) if payload.remembered_email is not None else None
+            ),
+            details=payload.details.strip(),
+        )
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return AccountRecoveryResult(
+            reference_code=record.reference_code,
+            status=record.status,
+            message="Recovery request received. Keep the reference code for support follow-up.",
+        )
+
+
+@app.get("/auth/account-recovery/{reference_code}", response_model=AccountRecoveryStatus)
+async def get_account_recovery_status(
+    reference_code: str,
+    contact_email: str = Query(min_length=3, max_length=255),
+) -> AccountRecoveryStatus:
+    with SessionLocal() as session:
+        record = session.scalar(
+            select(AccountRecoveryRequestRecord).where(
+                AccountRecoveryRequestRecord.reference_code == reference_code.upper(),
+                func.lower(AccountRecoveryRequestRecord.contact_email) == contact_email.strip().lower(),
+            )
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="Recovery request not found.")
+        return AccountRecoveryStatus(
+            reference_code=record.reference_code,
+            status=record.status,
+            updated_at=record.updated_at,
+        )
+
 @app.post("/auth/register", status_code = 201,response_model = User)
 async def register_user(user: UserCreate) -> User:
     with SessionLocal() as session:
@@ -1022,7 +1218,7 @@ async def login_user(payload: UserLogin) -> Token:
                 detail="Invalid email or password.",
             )
 
-        return Token(access_token=create_access_token(record.id))
+        return Token(access_token=create_access_token(record.id, record.token_version))
 
 @app.get("/auth/me", response_model=User)
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),) -> User:

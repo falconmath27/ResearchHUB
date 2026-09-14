@@ -25,6 +25,48 @@ class UserRecord(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True)
     name: Mapped[str] = mapped_column(String(120))
     password_hash: Mapped[str] = mapped_column(String(255))
+    token_version: Mapped[int] = mapped_column(default=0, server_default="0")
+
+
+class PasswordResetAttemptRecord(Base):
+    __tablename__ = "password_reset_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email_fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class PasswordResetTokenRecord(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AccountRecoveryRequestRecord(Base):
+    __tablename__ = "account_recovery_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reference_code: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(120))
+    contact_email: Mapped[str] = mapped_column(String(255), index=True)
+    remembered_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    details: Mapped[str] = mapped_column(String(2_000))
+    status: Mapped[str] = mapped_column(String(30), default="pending", server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ProjectMemberRecord(Base):
@@ -109,6 +151,9 @@ class MessageRecord(Base):
 
 class SourceRecord(Base):
     __tablename__ = "sources"
+    __table_args__ = (
+        UniqueConstraint("project_id", "doi", name="uq_sources_project_doi"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
@@ -118,6 +163,7 @@ class SourceRecord(Base):
     publication_year: Mapped[int | None] = mapped_column(nullable=True)
     source_type: Mapped[str] = mapped_column(String(30))
     url: Mapped[str | None] = mapped_column(String(2_048), nullable=True)
+    doi: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

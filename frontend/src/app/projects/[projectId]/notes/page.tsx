@@ -36,9 +36,21 @@ export default function ProjectNotesPage() {
   }
 
   useEffect(() => {
-    void loadNotes().catch((error) => {
-      setMessage(error instanceof Error ? error.message : "Could not load notes.");
-    });
+    let cancelled = false;
+
+    async function loadInitialNotes() {
+      try {
+        const response = await apiFetch(`/projects/${projectId}/notes`);
+        if (!response.ok) throw new Error("Could not load notes. Sign in and confirm project access.");
+        const loadedNotes = await response.json();
+        if (!cancelled) setNotes(loadedNotes);
+      } catch (error) {
+        if (!cancelled) setMessage(error instanceof Error ? error.message : "Could not load notes.");
+      }
+    }
+
+    void loadInitialNotes();
+    return () => { cancelled = true; };
   }, [projectId]);
 
   function resetForm() {

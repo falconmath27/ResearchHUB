@@ -1,12 +1,12 @@
 from app.main import app, validate_project_title
 import pytest
 from fastapi.testclient import TestClient
-from app.schemas import ProjectCreate, UserCreate
+from app.schemas import ProjectCreate, SourceCreate, UserCreate
 from pydantic import ValidationError
 
-from sqlalchemy import delete, inspect, select, text
+from sqlalchemy import delete, func, inspect, select, text
 from app.database import engine, SessionLocal
-from app.models import AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from app.models import AccountRecoveryRequestRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
 
 
 from app.security import hash_password, verify_password
@@ -19,6 +19,9 @@ def reset_projects() -> None:
     with SessionLocal() as session:
         session.execute(delete(AttachmentRecord))
         session.execute(delete(NoteVersionRecord))
+        session.execute(delete(PasswordResetTokenRecord))
+        session.execute(delete(PasswordResetAttemptRecord))
+        session.execute(delete(AccountRecoveryRequestRecord))
         session.execute(delete(SourceRecord))
         session.execute(delete(MessageRecord))
         session.execute(delete(NoteRecord))
@@ -544,6 +547,7 @@ def test_project_source_crud_and_filter_api() -> None:
         "publication_year": 2024,
         "source_type": "article",
         "url": "https://example.com/text-to-sql-survey",
+        "doi": "https://doi.org/10.1000/Text2SQL.Survey",
     })
     source_id = create_response.json()["id"]
 
@@ -554,17 +558,81 @@ def test_project_source_crud_and_filter_api() -> None:
         "publication_year": 2025,
         "source_type": "report",
         "url": "https://example.com/updated-survey",
+        "doi": "doi:10.1000/UPDATED.SURVEY",
     })
     delete_response = client.delete(f"/projects/1/sources/{source_id}")
 
     assert create_response.status_code == 201
     assert create_response.json()["creator_id"] == 1
     assert create_response.json()["source_type"] == "article"
+    assert create_response.json()["doi"] == "10.1000/text2sql.survey"
     assert list_response.status_code == 200
     assert list_response.json()[0]["title"] == "Text-to-SQL Survey"
     assert update_response.status_code == 200
     assert update_response.json()["source_type"] == "report"
+    assert update_response.json()["doi"] == "10.1000/updated.survey"
     assert delete_response.status_code == 204
+
+
+def test_source_doi_validation_and_normalization() -> None:
+    source = SourceCreate(
+        title="Reliable Research Paper",
+        source_type="article",
+        doi=" HTTPS://DX.DOI.ORG/10.5555/ResearchHub.2026 ",
+    )
+
+    assert source.doi == "10.5555/researchhub.2026"
+
+    with pytest.raises(ValidationError):
+        SourceCreate(
+            title="Invalid DOI Paper",
+            source_type="article",
+            doi="not-a-doi",
+        )
+
+
+def test_source_search_matches_title_authors_and_doi_with_type_filter() -> None:
+    create_test_project()
+    client.post("/projects/1/sources", json={
+        "title": "Neural Retrieval Systems",
+        "authors": "Mira Chen",
+        "source_type": "article",
+        "doi": "10.1234/neural.2026",
+    })
+    client.post("/projects/1/sources", json={
+        "title": "Climate Evidence Archive",
+        "authors": "Open Data Lab",
+        "source_type": "dataset",
+        "doi": "10.5678/climate-data",
+    })
+
+    title_response = client.get("/projects/1/sources?q=RETRIEVAL")
+    author_response = client.get("/projects/1/sources?q=mira")
+    doi_response = client.get("/projects/1/sources?q=5678/climate")
+    combined_response = client.get("/projects/1/sources?q=climate&source_type=article")
+
+    assert [source["title"] for source in title_response.json()] == ["Neural Retrieval Systems"]
+    assert [source["title"] for source in author_response.json()] == ["Neural Retrieval Systems"]
+    assert [source["title"] for source in doi_response.json()] == ["Climate Evidence Archive"]
+    assert combined_response.json() == []
+
+
+def test_duplicate_source_doi_is_rejected_within_project() -> None:
+    create_test_project()
+    first_response = client.post("/projects/1/sources", json={
+        "title": "Original Citation",
+        "source_type": "article",
+        "doi": "10.1000/duplicate",
+    })
+    duplicate_response = client.post("/projects/1/sources", json={
+        "title": "Duplicate Citation",
+        "source_type": "report",
+        "doi": "https://doi.org/10.1000/DUPLICATE",
+    })
+
+    assert first_response.status_code == 201
+    assert duplicate_response.status_code == 409
+    assert duplicate_response.json()["detail"] == "A source with this DOI already exists in this project."
 
 
 def test_viewer_cannot_manage_project_sources() -> None:
@@ -752,6 +820,93 @@ def test_get_current_user_api_rejects_invalid_token() -> None:
     )
 
     assert response.status_code == 401
+
+
+def test_password_reset_changes_password_revokes_sessions_and_consumes_token() -> None:
+    client.post("/auth/register", json={
+        "name": "Maya Chen",
+        "email": "maya@example.com",
+        "password": "securepass123",
+    })
+    login_response = client.post("/auth/login", json={
+        "email": "maya@example.com",
+        "password": "securepass123",
+    })
+    old_access_token = login_response.json()["access_token"]
+
+    request_response = client.post("/auth/password-reset/request", json={
+        "email": "MAYA@EXAMPLE.COM",
+    })
+    reset_token = request_response.json()["development_reset_url"].split("token=", 1)[1]
+    confirm_response = client.post("/auth/password-reset/confirm", json={
+        "token": reset_token,
+        "new_password": "new-secure-password",
+    })
+
+    assert request_response.status_code == 202
+    assert confirm_response.status_code == 204
+    assert client.post("/auth/login", json={
+        "email": "maya@example.com",
+        "password": "securepass123",
+    }).status_code == 401
+    assert client.post("/auth/login", json={
+        "email": "maya@example.com",
+        "password": "new-secure-password",
+    }).status_code == 200
+    assert client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {old_access_token}"},
+    ).status_code == 401
+    assert client.post("/auth/password-reset/confirm", json={
+        "token": reset_token,
+        "new_password": "another-password",
+    }).status_code == 400
+
+
+def test_password_reset_request_does_not_reveal_whether_account_exists() -> None:
+    existing_response = client.post("/auth/password-reset/request", json={
+        "email": "owner@example.com",
+    })
+    missing_response = client.post("/auth/password-reset/request", json={
+        "email": "missing@example.com",
+    })
+
+    assert existing_response.status_code == 202
+    assert missing_response.status_code == 202
+    assert existing_response.json()["message"] == missing_response.json()["message"]
+    assert missing_response.json()["development_reset_url"] is not None
+
+
+def test_password_reset_requests_are_rate_limited_without_revealing_it() -> None:
+    responses = [
+        client.post("/auth/password-reset/request", json={"email": "owner@example.com"})
+        for _ in range(4)
+    ]
+
+    assert all(response.status_code == 202 for response in responses)
+    with SessionLocal() as session:
+        assert session.scalar(select(func.count(PasswordResetAttemptRecord.id))) == 4
+        assert session.scalar(select(func.count(PasswordResetTokenRecord.id))) == 3
+
+
+def test_manual_account_recovery_creates_trackable_request() -> None:
+    create_response = client.post("/auth/account-recovery", json={
+        "name": "Maya Chen",
+        "contact_email": "maya.recovery@example.com",
+        "remembered_email": "old.maya@example.com",
+        "details": "I no longer have access to the email address used for my research workspace.",
+    })
+    reference_code = create_response.json()["reference_code"]
+    status_response = client.get(
+        f"/auth/account-recovery/{reference_code}",
+        params={"contact_email": "MAYA.RECOVERY@EXAMPLE.COM"},
+    )
+
+    assert create_response.status_code == 202
+    assert create_response.json()["status"] == "pending"
+    assert reference_code.startswith("RH-")
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "pending"
 
 
 def test_project_api_hides_projects_from_non_members() -> None:

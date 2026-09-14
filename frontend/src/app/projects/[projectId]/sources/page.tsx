@@ -17,6 +17,7 @@ type Source = {
   publication_year: number | null;
   source_type: SourceType;
   url: string | null;
+  doi: string | null;
   updated_at: string;
 };
 
@@ -33,24 +34,35 @@ function formatFileSize(sizeBytes: number) {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function buildSourceQuery(filter: "all" | SourceType, search: string) {
+  const params = new URLSearchParams();
+  if (filter !== "all") params.set("source_type", filter);
+  if (search.trim()) params.set("q", search.trim());
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 export default function ProjectSourcesPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [sources, setSources] = useState<Source[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [filter, setFilter] = useState<"all" | SourceType>("all");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [editingSource, setEditingSource] = useState<Source | null>(null);
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
   const [publicationYear, setPublicationYear] = useState("");
   const [sourceType, setSourceType] = useState<SourceType>("article");
   const [url, setUrl] = useState("");
+  const [doi, setDoi] = useState("");
   const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadingSourceId, setUploadingSourceId] = useState<number | null>(null);
 
-  async function loadSources(selectedFilter = filter) {
-    const query = selectedFilter === "all" ? "" : `?source_type=${selectedFilter}`;
-    const response = await apiFetch(`/projects/${projectId}/sources${query}`);
+  async function loadSources(selectedFilter = filter, selectedSearch = debouncedSearch) {
+    const response = await apiFetch(`/projects/${projectId}/sources${buildSourceQuery(selectedFilter, selectedSearch)}`);
     if (!response.ok) throw new Error("Could not load sources. Sign in and confirm project access.");
     setSources(await response.json());
   }
@@ -62,13 +74,19 @@ export default function ProjectSourcesPage() {
   }
 
   useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedSearch(search), 300);
+    return () => window.clearTimeout(timeout);
+  }, [search]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function fetchLibrary() {
+      setIsLoading(true);
+      setMessage("");
       try {
-        const sourceQuery = filter === "all" ? "" : `?source_type=${filter}`;
         const [sourceResponse, attachmentResponse] = await Promise.all([
-          apiFetch(`/projects/${projectId}/sources${sourceQuery}`),
+          apiFetch(`/projects/${projectId}/sources${buildSourceQuery(filter, debouncedSearch)}`),
           apiFetch(`/projects/${projectId}/attachments`),
         ]);
         if (!sourceResponse.ok || !attachmentResponse.ok) {
@@ -84,12 +102,14 @@ export default function ProjectSourcesPage() {
         }
       } catch (error) {
         if (!cancelled) setMessage(error instanceof Error ? error.message : "Could not load sources.");
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     }
 
     void fetchLibrary();
     return () => { cancelled = true; };
-  }, [filter, projectId]);
+  }, [debouncedSearch, filter, projectId]);
 
   function resetForm() {
     setEditingSource(null);
@@ -98,6 +118,7 @@ export default function ProjectSourcesPage() {
     setPublicationYear("");
     setSourceType("article");
     setUrl("");
+    setDoi("");
   }
 
   function beginEdit(source: Source) {
@@ -107,6 +128,7 @@ export default function ProjectSourcesPage() {
     setPublicationYear(source.publication_year?.toString() ?? "");
     setSourceType(source.source_type);
     setUrl(source.url ?? "");
+    setDoi(source.doi ?? "");
   }
 
   async function saveSource(event: FormEvent<HTMLFormElement>) {
@@ -127,11 +149,18 @@ export default function ProjectSourcesPage() {
           publication_year: publicationYear ? Number(publicationYear) : null,
           source_type: sourceType,
           url: url || null,
+          doi: doi || null,
         }),
       });
 
       if (!response.ok) {
-        setMessage("Could not save this source. Owners and editors can manage the source library.");
+        if (response.status === 409) {
+          setMessage("This project already contains a source with that DOI.");
+        } else if (response.status === 422) {
+          setMessage("Check the source details. A DOI should look like 10.1000/example.");
+        } else {
+          setMessage("Could not save this source. Owners and editors can manage the source library.");
+        }
         return;
       }
 
@@ -234,15 +263,20 @@ export default function ProjectSourcesPage() {
             </select>
             <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/source" type="url" />
           </div>
+          <input value={doi} onChange={(event) => setDoi(event.target.value)} maxLength={255} placeholder="DOI, e.g. 10.1000/example or https://doi.org/10.1000/example" />
           <div><button disabled={isSubmitting} type="submit">{isSubmitting ? "Saving..." : editingSource ? "Save changes" : "Add source"}</button>{editingSource && <button className={styles.cancel} onClick={resetForm} type="button">Cancel</button>}</div>
         </form>
 
         <section className={styles.libraryHeader}>
           <h2>Project references</h2>
-          <label>Filter by type<select value={filter} onChange={(event) => setFilter(event.target.value as "all" | SourceType)}><option value="all">All sources</option>{sourceTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+          <div className={styles.libraryControls}>
+            <label>Search<input aria-label="Search sources" onChange={(event) => setSearch(event.target.value)} placeholder="Title, author, or DOI" type="search" value={search} /></label>
+            <label>Filter by type<select value={filter} onChange={(event) => setFilter(event.target.value as "all" | SourceType)}><option value="all">All sources</option>{sourceTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+          </div>
         </section>
         {message && <p className={styles.notice}>{message}</p>}
-        {!message && sources.length === 0 && <p className={styles.empty}>No sources match this view. Add the first project reference.</p>}
+        {isLoading && <p className={styles.empty}>Searching the source library...</p>}
+        {!isLoading && !message && sources.length === 0 && <p className={styles.empty}>{search.trim() || filter !== "all" ? "No sources match this search and filter." : "No sources yet. Add the first project reference."}</p>}
 
         <div className={styles.sourceList}>
           {sources.map((source) => (
@@ -250,6 +284,7 @@ export default function ProjectSourcesPage() {
               <div className={styles.cardHeader}><span>{source.source_type}</span><small>{source.publication_year ?? "No year"}</small></div>
               <h3>{source.title}</h3>
               {source.authors && <p className={styles.authors}>{source.authors}</p>}
+              {source.doi && <a href={`https://doi.org/${source.doi}`} rel="noreferrer" target="_blank">DOI: {source.doi}</a>}
               {source.url && <a href={source.url} rel="noreferrer" target="_blank">Open source</a>}
               <section className={styles.attachments}>
                 <div className={styles.attachmentsHeader}><strong>Files</strong><label className={styles.uploadButton}>{uploadingSourceId === source.id ? "Uploading..." : "Upload file"}<input accept=".pdf,.csv,.tsv,.txt,.docx,.xlsx,.json" disabled={uploadingSourceId !== null} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAttachment(source.id, file); event.currentTarget.value = ""; }} type="file" /></label></div>

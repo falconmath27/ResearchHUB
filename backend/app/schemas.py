@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 
 from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator
 from typing import Literal
@@ -60,6 +61,49 @@ class UserLogin(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+
+class PasswordResetRequestResult(BaseModel):
+    message: str
+    development_reset_url: str | None = None
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class AccountRecoveryCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    contact_email: EmailStr
+    remembered_email: EmailStr | None = None
+    details: str = Field(min_length=20, max_length=2_000)
+
+    @field_validator("contact_email", "remembered_email")
+    @classmethod
+    def normalize_recovery_email(cls, value: EmailStr | None) -> str | None:
+        return str(value).strip().lower() if value is not None else None
+
+
+class AccountRecoveryResult(BaseModel):
+    reference_code: str
+    status: Literal["pending", "in_review", "resolved", "rejected"]
+    message: str
+
+
+class AccountRecoveryStatus(BaseModel):
+    reference_code: str
+    status: Literal["pending", "in_review", "resolved", "rejected"]
+    updated_at: datetime
 
 
 class ProjectMemberCreate(BaseModel):
@@ -158,6 +202,31 @@ class Message(BaseModel):
 
 SourceType = Literal["article", "book", "dataset", "report", "website", "other"]
 
+DOI_PATTERN = re.compile(r"^10\.\d{4,9}/\S+$", re.IGNORECASE)
+
+
+def normalize_doi(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized = value.strip().lower()
+    for prefix in (
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://dx.doi.org/",
+        "http://dx.doi.org/",
+        "doi:",
+    ):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):].strip()
+            break
+
+    if not normalized:
+        return None
+    if len(normalized) > 255 or DOI_PATTERN.fullmatch(normalized) is None:
+        raise ValueError("Enter a valid DOI, such as 10.1000/example.")
+    return normalized
+
 
 class SourceCreate(BaseModel):
     title: str = Field(min_length=3, max_length=500)
@@ -165,6 +234,14 @@ class SourceCreate(BaseModel):
     publication_year: int | None = Field(default=None, ge=1, le=2100)
     source_type: SourceType
     url: HttpUrl | None = None
+    doi: str | None = None
+
+    @field_validator("doi", mode="before")
+    @classmethod
+    def validate_doi(cls, value: object) -> str | None:
+        if value is None or isinstance(value, str):
+            return normalize_doi(value)
+        raise ValueError("DOI must be text.")
 
 
 class SourceUpdate(SourceCreate):
@@ -180,6 +257,7 @@ class Source(BaseModel):
     publication_year: int | None
     source_type: SourceType
     url: str | None
+    doi: str | None
     created_at: datetime
     updated_at: datetime
 
