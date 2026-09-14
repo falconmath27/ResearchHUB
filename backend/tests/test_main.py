@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from sqlalchemy import delete, inspect, select, text
 from app.database import engine, SessionLocal
-from app.models import AttachmentRecord, MessageRecord, NoteRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from app.models import AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
 
 
 from app.security import hash_password, verify_password
@@ -18,6 +18,7 @@ client = TestClient(app)
 def reset_projects() -> None:
     with SessionLocal() as session:
         session.execute(delete(AttachmentRecord))
+        session.execute(delete(NoteVersionRecord))
         session.execute(delete(SourceRecord))
         session.execute(delete(MessageRecord))
         session.execute(delete(NoteRecord))
@@ -401,6 +402,35 @@ def test_viewer_cannot_create_project_note() -> None:
     assert response.status_code == 403
 
 
+def test_note_versions_are_immutable_and_can_be_restored() -> None:
+    create_test_project()
+    create_response = client.post("/projects/1/notes", json={
+        "title": "Initial research direction",
+        "content": "Compare policy effects across regions.",
+    })
+    note_id = create_response.json()["id"]
+    client.put(f"/projects/1/notes/{note_id}", json={
+        "title": "Updated research direction",
+        "content": "Compare policy effects across regions and years.",
+    })
+
+    versions_response = client.get(f"/projects/1/notes/{note_id}/versions")
+    initial_version_id = versions_response.json()[1]["id"]
+    restore_response = client.post(
+        f"/projects/1/notes/{note_id}/versions/{initial_version_id}/restore"
+    )
+    restored_versions_response = client.get(
+        f"/projects/1/notes/{note_id}/versions"
+    )
+
+    assert versions_response.status_code == 200
+    assert [version["version"] for version in versions_response.json()] == [2, 1]
+    assert versions_response.json()[1]["title"] == "Initial research direction"
+    assert restore_response.status_code == 200
+    assert restore_response.json()["title"] == "Initial research direction"
+    assert [version["version"] for version in restored_versions_response.json()] == [3, 2, 1]
+
+
 def test_project_task_crud_api() -> None:
     create_test_project()
     create_response = client.post("/projects/1/tasks", json={
@@ -661,6 +691,21 @@ def test_login_user_api() -> None:
 
     assert response.status_code == 200
     assert response.json()["token_type"] == "bearer"
+
+
+def test_login_user_api_ignores_email_case() -> None:
+    client.post("/auth/register", json={
+        "name": "Maya Chen",
+        "email": "maya.chen@example.com",
+        "password": "securepass123",
+    })
+
+    response = client.post("/auth/login", json={
+        "email": "MAYA.CHEN@EXAMPLE.COM",
+        "password": "securepass123",
+    })
+
+    assert response.status_code == 200
     assert isinstance(response.json()["access_token"], str)
 
 # corresponding failure test

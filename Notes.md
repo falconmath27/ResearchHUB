@@ -239,6 +239,7 @@ Before registration data is saved, the application converts a password into a on
 - `create_access_token` stores the user ID in the JWT `sub` (subject) claim and adds an expiration time with `exp`.
 - The JWT is signed with `JWT_SECRET_KEY`. The development fallback works locally, but a production deployment must set a long, private `JWT_SECRET_KEY` environment variable.
 - The API returns `token_type="bearer"`, which tells clients to send it later as `Authorization: Bearer <token>`.
+- Email addresses are normalized to lowercase when accounts are registered and when users sign in. The database lookup also uses `lower(email)` so existing mixed-case records remain reachable. This avoids treating the same email as different accounts purely because of casing.
 
 ## Protected Current-User Route
 
@@ -300,6 +301,25 @@ Research notes are a separate resource under a project: `notes` has `project_id`
 
 Interview answer: “I modelled notes as project-scoped resources, kept author identity for accountability, and enforced permissions at the API boundary. That avoids relying on the frontend for security and keeps the model ready for later version history.”
 
+## Note Version History: Notion-Style Restore Safety
+
+The notes workspace now uses a Notion-style page-history pattern: every saved state is preserved in a readable timeline, and restoring an earlier version creates a new latest version rather than rewriting history.
+
+- **Immutable append-only revisions:** creating a note stores Version 1. Every edit writes another `note_versions` row in the same transaction as the note update. Version rows are never edited in place.
+- **Safe restore:** `POST /projects/{project_id}/notes/{note_id}/versions/{version_id}/restore` copies an older title and content into the live note, then records that restored state as the next version. For example, restoring Version 1 after Version 2 creates Version 3. Version 2 remains available.
+- **Authorization:** every project member may inspect note history. The same author/editor/owner policy used for editing a note protects restore actions; viewers cannot alter a project note by calling the API directly.
+- **Audit identity:** each revision stores `edited_by_id`, and the version-list endpoint joins it to `users` to return an editor name. The foreign key uses `SET NULL`, so historical content remains readable if a former member’s user account is removed.
+- **Data integrity:** `UNIQUE(note_id, version)` prevents duplicate version numbers for a note. The `(project_id, note_id)` index supports the normal history-timeline query without scanning every project's revisions.
+- **Transaction boundary:** the note update and its version snapshot commit together. A failed database operation creates neither a changed live note nor a false history entry.
+
+### Tradeoffs and Future Improvements
+
+- **Storage growth:** complete snapshots are simple to restore and perfect for our 10,000-character note limit, but large documents would eventually need version retention rules, compressed snapshots, or content-diff storage.
+- **Concurrent edits:** the current MVP assigns the next version number in application code. Two simultaneous writers could race in a high-traffic deployment; the database uniqueness rule detects the conflict, and production should add optimistic locking or a transaction retry.
+- **No character-level collaboration:** this is version history, not Google Docs-style live co-editing. Real-time cursors and conflict-free merging require WebSockets, operational transforms or CRDTs, presence state, and a much more complex editor.
+
+Interview answer: “I used an append-only version ledger for research notes, inspired by page-history workflows. Restores are non-destructive: they become a new version, which keeps the full reasoning trail. I put authorization and snapshot creation in the API transaction, so the frontend cannot bypass the audit trail.”
+
 ## Research Tasks: System Design
 
 Tasks are also project-scoped records, but they add workflow state and optional assignment.
@@ -319,6 +339,16 @@ Interview answer: “Tasks are a small state machine scoped to a project. I kept
 - **Join table:** `project_members` is a many-to-many association with role data. It solves the “multiple owners” requirement without adding a fragile comma-separated owner list to `projects`.
 - **Known limitation:** the final-owner check is application-level. Under heavy concurrent requests, two owners could theoretically both try to remove themselves. A production system should add transaction locking or a database trigger for that invariant.
 - **Known limitation:** the browser currently stores JWTs in local storage for learning simplicity. A production deployment should use short-lived access tokens with refresh tokens in secure, HTTP-only cookies to reduce XSS exposure.
+
+## Test Database Isolation
+
+Automated tests must never point at the same database as the running application. Our test fixture intentionally deletes rows before every test to make the cases independent; when it used `researchhub.db`, that useful test behavior also erased real local accounts and projects.
+
+- `tests/conftest.py` now sets `SQLITE_DATABASE_PATH` to `backend/test_researchhub.db` before the application modules are imported by pytest.
+- The application config reads that environment variable only for SQLite. The normal server continues to use `backend/researchhub.db`.
+- The temporary test database is deleted at the beginning and end of a pytest session and is ignored by Git.
+
+Interview answer: “I isolated test state from development state using an environment-configured database path. Tests can freely reset their database for deterministic results, while the developer's real local data remains intact. This is the local version of using a separate test database or ephemeral container in CI.”
 
 ## Project Discussion: System Design
 

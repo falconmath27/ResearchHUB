@@ -55,6 +55,26 @@ class NoteRecord(Base):
     )
 
 
+class NoteVersionRecord(Base):
+    __tablename__ = "note_versions"
+    __table_args__ = (
+        UniqueConstraint("note_id", "version", name="uq_note_versions_note_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    note_id: Mapped[int] = mapped_column(ForeignKey("notes.id", ondelete="CASCADE"))
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    edited_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    version: Mapped[int] = mapped_column()
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(String(10_000))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class TaskRecord(Base):
     __tablename__ = "tasks"
 

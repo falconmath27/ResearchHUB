@@ -36,6 +36,11 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
 
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
 
 class User(BaseModel):
     id: int
@@ -45,6 +50,11 @@ class User(BaseModel):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
 
 
 class Token(BaseModel):
@@ -85,6 +95,18 @@ class Note(BaseModel):
     content: str
     created_at: datetime
     updated_at: datetime
+
+
+class NoteVersion(BaseModel):
+    id: int
+    note_id: int
+    project_id: int
+    edited_by_id: int | None
+    editor_name: str | None
+    version: int
+    title: str
+    content: str
+    created_at: datetime
 
 
 TaskStatus = Literal["backlog", "in_progress", "in_review", "done"]

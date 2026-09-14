@@ -11,6 +11,7 @@ from .schemas import (
     Note,
     NoteCreate,
     NoteUpdate,
+    NoteVersion,
     Message,
     MessageCreate,
     Source,
@@ -31,7 +32,7 @@ from typing import Literal
 from sqlalchemy import func, select
 
 from .database import SessionLocal
-from .models import AttachmentRecord, MessageRecord, NoteRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from .models import AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
 from fastapi.middleware.cors import CORSMiddleware
 from .security import hash_password,create_access_token,verify_password,get_user_id_from_token
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -124,6 +125,45 @@ def note_to_response(record: NoteRecord) -> Note:
     )
 
 
+def note_version_to_response(
+    record: NoteVersionRecord,
+    editor: UserRecord | None,
+) -> NoteVersion:
+    return NoteVersion(
+        id=record.id,
+        note_id=record.note_id,
+        project_id=record.project_id,
+        edited_by_id=record.edited_by_id,
+        editor_name=editor.name if editor is not None else None,
+        version=record.version,
+        title=record.title,
+        content=record.content,
+        created_at=record.created_at,
+    )
+
+
+def create_note_version(
+    session: SessionLocal,
+    record: NoteRecord,
+    editor_id: int,
+) -> NoteVersionRecord:
+    latest_version = session.scalar(
+        select(func.max(NoteVersionRecord.version)).where(
+            NoteVersionRecord.note_id == record.id
+        )
+    )
+    version = NoteVersionRecord(
+        note_id=record.id,
+        project_id=record.project_id,
+        edited_by_id=editor_id,
+        version=(latest_version or 0) + 1,
+        title=record.title,
+        content=record.content,
+    )
+    session.add(version)
+    return version
+
+
 def task_to_response(record: TaskRecord) -> Task:
     return Task(
         id=record.id,
@@ -195,6 +235,22 @@ def get_project_note(session: SessionLocal, project_id: int, note_id: int) -> No
     record = session.get(NoteRecord, note_id)
     if record is None or record.project_id != project_id:
         raise HTTPException(status_code=404, detail="Note not found")
+    return record
+
+
+def get_note_version(
+    session: SessionLocal,
+    project_id: int,
+    note_id: int,
+    version_id: int,
+) -> NoteVersionRecord:
+    record = session.get(NoteVersionRecord, version_id)
+    if (
+        record is None
+        or record.project_id != project_id
+        or record.note_id != note_id
+    ):
+        raise HTTPException(status_code=404, detail="Note version not found")
     return record
 
 
@@ -497,6 +553,8 @@ async def create_note(
             content=payload.content,
         )
         session.add(record)
+        session.flush()
+        create_note_version(session, record, current_user.id)
         session.commit()
         session.refresh(record)
         return note_to_response(record)
@@ -535,6 +593,59 @@ async def update_note(
 
         record.title = payload.title
         record.content = payload.content
+        create_note_version(session, record, current_user.id)
+        session.commit()
+        session.refresh(record)
+        return note_to_response(record)
+
+
+@app.get(
+    "/projects/{project_id}/notes/{note_id}/versions",
+    response_model=list[NoteVersion],
+)
+async def list_note_versions(
+    project_id: int,
+    note_id: int,
+    current_user: UserRecord = Depends(get_authenticated_user),
+) -> list[NoteVersion]:
+    with SessionLocal() as session:
+        get_project_note(session, project_id, note_id)
+        get_project_membership(session, project_id, current_user.id)
+        rows = session.execute(
+            select(NoteVersionRecord, UserRecord)
+            .outerjoin(UserRecord, NoteVersionRecord.edited_by_id == UserRecord.id)
+            .where(
+                NoteVersionRecord.project_id == project_id,
+                NoteVersionRecord.note_id == note_id,
+            )
+            .order_by(NoteVersionRecord.version.desc())
+        ).all()
+        return [
+            note_version_to_response(record, editor)
+            for record, editor in rows
+        ]
+
+
+@app.post(
+    "/projects/{project_id}/notes/{note_id}/versions/{version_id}/restore",
+    response_model=Note,
+)
+async def restore_note_version(
+    project_id: int,
+    note_id: int,
+    version_id: int,
+    current_user: UserRecord = Depends(get_authenticated_user),
+) -> Note:
+    with SessionLocal() as session:
+        record = get_project_note(session, project_id, note_id)
+        membership = get_project_membership(session, project_id, current_user.id)
+        if membership.role not in {"owner", "editor"} and record.author_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Note edit permission required")
+
+        version = get_note_version(session, project_id, note_id, version_id)
+        record.title = version.title
+        record.content = version.content
+        create_note_version(session, record, current_user.id)
         session.commit()
         session.refresh(record)
         return note_to_response(record)
@@ -873,7 +984,7 @@ async def delete_attachment(
 async def register_user(user: UserCreate) -> User:
     with SessionLocal() as session:
         existing_user = session.scalar(
-            select(UserRecord).where(UserRecord.email == str(user.email))
+            select(UserRecord).where(func.lower(UserRecord.email) == str(user.email))
         )
 
         if existing_user:
@@ -899,7 +1010,7 @@ async def register_user(user: UserCreate) -> User:
 async def login_user(payload: UserLogin) -> Token:
     with SessionLocal() as session:
         record = session.scalar(
-            select(UserRecord).where(UserRecord.email == str(payload.email))
+            select(UserRecord).where(func.lower(UserRecord.email) == str(payload.email))
         )
 
         if record is None or not verify_password(

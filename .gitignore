@@ -1,6 +1,7 @@
 # Python
 backend/.venv/
 backend/researchhub.db
+backend/test_researchhub.db
 backend/uploads/
 __pycache__/
 *.py[cod]
