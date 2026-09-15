@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+import logging
 import secrets
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from .schemas import (
     Project,
@@ -38,6 +39,7 @@ from .schemas import (
     PasswordResetConfirm,
     PasswordResetRequest,
     PasswordResetRequestResult,
+    AnalysisJob,
 )
 from typing import Literal
 from sqlalchemy import func, or_, select, update
@@ -50,13 +52,15 @@ from .config import (
     PASSWORD_RESET_MAX_REQUESTS_PER_HOUR,
 )
 from .database import SessionLocal
-from .models import AccountRecoveryRequestRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from .models import AccountRecoveryRequestRecord, AnalysisJobRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from .analysis import AnalysisExtractionError, extract_attachment_text
 from fastapi.middleware.cors import CORSMiddleware
 from .security import create_access_token, get_access_token_identity, hash_password, verify_password
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .storage import attachment_file_path, delete_upload, save_upload
 
 app = FastAPI(title="ResearchHub API", version="0.1.0")
+logger = logging.getLogger(__name__)
 bearer_scheme = HTTPBearer()
 app.add_middleware(
     CORSMiddleware,
@@ -239,6 +243,94 @@ def attachment_to_response(record: AttachmentRecord) -> Attachment:
             f"/projects/{record.project_id}/attachments/{record.id}/download"
         ),
     )
+
+
+def analysis_job_to_response(record: AnalysisJobRecord) -> AnalysisJob:
+    return AnalysisJob(
+        id=record.id,
+        project_id=record.project_id,
+        attachment_id=record.attachment_id,
+        requested_by_id=record.requested_by_id,
+        parent_job_id=record.parent_job_id,
+        status=record.status,
+        attempt=record.attempt,
+        result=record.result,
+        error_code=record.error_code,
+        error_message=record.error_message,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        completed_at=record.completed_at,
+    )
+
+
+def process_analysis_job(job_id: int) -> None:
+    started_at = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        claim = session.execute(
+            update(AnalysisJobRecord)
+            .where(AnalysisJobRecord.id == job_id, AnalysisJobRecord.status == "queued")
+            .values(status="processing", started_at=started_at)
+        )
+        session.commit()
+        if claim.rowcount != 1:
+            return
+
+        job = session.get(AnalysisJobRecord, job_id)
+        attachment = session.get(AttachmentRecord, job.attachment_id) if job is not None else None
+        stored_filename = attachment.stored_filename if attachment is not None else None
+
+    try:
+        if stored_filename is None:
+            raise AnalysisExtractionError(
+                "attachment_missing",
+                "The uploaded file is no longer available.",
+            )
+        result = extract_attachment_text(attachment_file_path(stored_filename))
+        with SessionLocal() as session:
+            session.execute(
+                update(AnalysisJobRecord)
+                .where(AnalysisJobRecord.id == job_id, AnalysisJobRecord.status == "processing")
+                .values(
+                    status="completed",
+                    active_key=None,
+                    result=result,
+                    error_code=None,
+                    error_message=None,
+                    completed_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+    except AnalysisExtractionError as error:
+        with SessionLocal() as session:
+            session.execute(
+                update(AnalysisJobRecord)
+                .where(AnalysisJobRecord.id == job_id)
+                .values(
+                    status="failed",
+                    active_key=None,
+                    result=None,
+                    error_code=error.code,
+                    error_message=error.public_message,
+                    completed_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+    except Exception:
+        logger.exception("Unexpected attachment analysis failure for job %s", job_id)
+        with SessionLocal() as session:
+            session.execute(
+                update(AnalysisJobRecord)
+                .where(AnalysisJobRecord.id == job_id)
+                .values(
+                    status="failed",
+                    active_key=None,
+                    result=None,
+                    error_code="internal_error",
+                    error_message="The document could not be prepared for analysis.",
+                    completed_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
 
 
 def require_project_editor(
@@ -984,6 +1076,167 @@ async def list_attachments(
             statement.order_by(AttachmentRecord.created_at.desc(), AttachmentRecord.id.desc())
         ).all()
         return [attachment_to_response(record) for record in records]
+
+
+@app.post(
+    "/projects/{project_id}/attachments/{attachment_id}/analysis-jobs",
+    status_code=202,
+    response_model=AnalysisJob,
+)
+async def create_analysis_job(
+    project_id: int,
+    attachment_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: UserRecord = Depends(get_authenticated_user),
+) -> AnalysisJob:
+    active_key = f"attachment:{attachment_id}"
+    with SessionLocal() as session:
+        if session.get(ProjectRecord, project_id) is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_editor(session, project_id, current_user.id)
+
+        attachment = session.get(AttachmentRecord, attachment_id)
+        if attachment is None or attachment.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        if not attachment.original_filename.lower().endswith((".pdf", ".txt")):
+            raise HTTPException(
+                status_code=422,
+                detail="Analysis currently supports PDF and TXT files only.",
+            )
+
+        active_job = session.scalar(
+            select(AnalysisJobRecord).where(
+                AnalysisJobRecord.project_id == project_id,
+                AnalysisJobRecord.active_key == active_key,
+            )
+        )
+        if active_job is not None:
+            return analysis_job_to_response(active_job)
+
+        next_attempt = (session.scalar(
+            select(func.max(AnalysisJobRecord.attempt)).where(
+                AnalysisJobRecord.project_id == project_id,
+                AnalysisJobRecord.attachment_id == attachment_id,
+            )
+        ) or 0) + 1
+        job = AnalysisJobRecord(
+            project_id=project_id,
+            attachment_id=attachment_id,
+            requested_by_id=current_user.id,
+            status="queued",
+            attempt=next_attempt,
+            active_key=active_key,
+        )
+        session.add(job)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            active_job = session.scalar(
+                select(AnalysisJobRecord).where(
+                    AnalysisJobRecord.project_id == project_id,
+                    AnalysisJobRecord.active_key == active_key,
+                )
+            )
+            if active_job is None:
+                raise
+            return analysis_job_to_response(active_job)
+        session.refresh(job)
+        background_tasks.add_task(process_analysis_job, job.id)
+        return analysis_job_to_response(job)
+
+
+@app.get("/projects/{project_id}/analysis-jobs", response_model=list[AnalysisJob])
+async def list_analysis_jobs(
+    project_id: int,
+    attachment_id: int | None = None,
+    current_user: UserRecord = Depends(get_authenticated_user),
+) -> list[AnalysisJob]:
+    with SessionLocal() as session:
+        if session.get(ProjectRecord, project_id) is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        get_project_membership(session, project_id, current_user.id)
+
+        statement = select(AnalysisJobRecord).where(AnalysisJobRecord.project_id == project_id)
+        if attachment_id is not None:
+            statement = statement.where(AnalysisJobRecord.attachment_id == attachment_id)
+        jobs = session.scalars(
+            statement.order_by(AnalysisJobRecord.created_at.desc(), AnalysisJobRecord.id.desc())
+        ).all()
+        return [analysis_job_to_response(job) for job in jobs]
+
+
+@app.get("/projects/{project_id}/analysis-jobs/{job_id}", response_model=AnalysisJob)
+async def get_analysis_job(
+    project_id: int,
+    job_id: int,
+    current_user: UserRecord = Depends(get_authenticated_user),
+) -> AnalysisJob:
+    with SessionLocal() as session:
+        if session.get(ProjectRecord, project_id) is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        get_project_membership(session, project_id, current_user.id)
+        job = session.get(AnalysisJobRecord, job_id)
+        if job is None or job.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Analysis job not found")
+        return analysis_job_to_response(job)
+
+
+@app.post(
+    "/projects/{project_id}/analysis-jobs/{job_id}/retry",
+    status_code=202,
+    response_model=AnalysisJob,
+)
+async def retry_analysis_job(
+    project_id: int,
+    job_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: UserRecord = Depends(get_authenticated_user),
+) -> AnalysisJob:
+    with SessionLocal() as session:
+        previous_job = session.get(AnalysisJobRecord, job_id)
+        if previous_job is None or previous_job.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Analysis job not found")
+        require_project_editor(session, project_id, current_user.id)
+        if previous_job.status != "failed":
+            raise HTTPException(status_code=409, detail="Only failed analysis jobs can be retried.")
+
+        active_key = f"attachment:{previous_job.attachment_id}"
+        active_job = session.scalar(
+            select(AnalysisJobRecord).where(
+                AnalysisJobRecord.project_id == project_id,
+                AnalysisJobRecord.active_key == active_key,
+            )
+        )
+        if active_job is not None:
+            return analysis_job_to_response(active_job)
+
+        job = AnalysisJobRecord(
+            project_id=project_id,
+            attachment_id=previous_job.attachment_id,
+            requested_by_id=current_user.id,
+            parent_job_id=previous_job.id,
+            status="queued",
+            attempt=previous_job.attempt + 1,
+            active_key=active_key,
+        )
+        session.add(job)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            active_job = session.scalar(
+                select(AnalysisJobRecord).where(
+                    AnalysisJobRecord.project_id == project_id,
+                    AnalysisJobRecord.active_key == active_key,
+                )
+            )
+            if active_job is None:
+                raise
+            return analysis_job_to_response(active_job)
+        session.refresh(job)
+        background_tasks.add_task(process_analysis_job, job.id)
+        return analysis_job_to_response(job)
 
 
 @app.get("/projects/{project_id}/attachments/{attachment_id}/download")

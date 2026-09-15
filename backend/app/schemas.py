@@ -272,3 +272,22 @@ class Attachment(BaseModel):
     size_bytes: int
     created_at: datetime
     download_url: str
+
+
+AnalysisJobStatus = Literal["queued", "processing", "completed", "failed"]
+
+
+class AnalysisJob(BaseModel):
+    id: int
+    project_id: int
+    attachment_id: int
+    requested_by_id: int
+    parent_job_id: int | None
+    status: AnalysisJobStatus
+    attempt: int
+    result: dict[str, object] | None
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None

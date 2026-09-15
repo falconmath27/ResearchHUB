@@ -29,6 +29,26 @@ type Attachment = {
   download_url: string;
 };
 
+type AnalysisJobStatus = "queued" | "processing" | "completed" | "failed";
+type AnalysisResult = {
+  stage: string;
+  file_type: string;
+  page_count: number | null;
+  character_count: number;
+  word_count: number;
+  truncated: boolean;
+  text_preview: string;
+};
+type AnalysisJob = {
+  id: number;
+  attachment_id: number;
+  parent_job_id: number | null;
+  status: AnalysisJobStatus;
+  attempt: number;
+  result: AnalysisResult | null;
+  error_message: string | null;
+};
+
 function formatFileSize(sizeBytes: number) {
   if (sizeBytes < 1024 * 1024) return `${Math.max(1, Math.round(sizeBytes / 1024))} KB`;
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -46,6 +66,7 @@ export default function ProjectSourcesPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [sources, setSources] = useState<Source[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [analysisJobs, setAnalysisJobs] = useState<AnalysisJob[]>([]);
   const [filter, setFilter] = useState<"all" | SourceType>("all");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -60,6 +81,7 @@ export default function ProjectSourcesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadingSourceId, setUploadingSourceId] = useState<number | null>(null);
+  const [startingAnalysisFor, setStartingAnalysisFor] = useState<number | null>(null);
 
   async function loadSources(selectedFilter = filter, selectedSearch = debouncedSearch) {
     const response = await apiFetch(`/projects/${projectId}/sources${buildSourceQuery(selectedFilter, selectedSearch)}`);
@@ -71,6 +93,12 @@ export default function ProjectSourcesPage() {
     const response = await apiFetch(`/projects/${projectId}/attachments`);
     if (!response.ok) throw new Error("Could not load source files.");
     setAttachments(await response.json());
+  }
+
+  async function loadAnalysisJobs() {
+    const response = await apiFetch(`/projects/${projectId}/analysis-jobs`);
+    if (!response.ok) throw new Error("Could not load analysis jobs.");
+    setAnalysisJobs(await response.json());
   }
 
   useEffect(() => {
@@ -85,20 +113,23 @@ export default function ProjectSourcesPage() {
       setIsLoading(true);
       setMessage("");
       try {
-        const [sourceResponse, attachmentResponse] = await Promise.all([
+        const [sourceResponse, attachmentResponse, analysisResponse] = await Promise.all([
           apiFetch(`/projects/${projectId}/sources${buildSourceQuery(filter, debouncedSearch)}`),
           apiFetch(`/projects/${projectId}/attachments`),
+          apiFetch(`/projects/${projectId}/analysis-jobs`),
         ]);
-        if (!sourceResponse.ok || !attachmentResponse.ok) {
+        if (!sourceResponse.ok || !attachmentResponse.ok || !analysisResponse.ok) {
           throw new Error("Could not load the source library. Sign in and confirm project access.");
         }
-        const [loadedSources, loadedAttachments] = await Promise.all([
+        const [loadedSources, loadedAttachments, loadedAnalysisJobs] = await Promise.all([
           sourceResponse.json(),
           attachmentResponse.json(),
+          analysisResponse.json(),
         ]);
         if (!cancelled) {
           setSources(loadedSources);
           setAttachments(loadedAttachments);
+          setAnalysisJobs(loadedAnalysisJobs);
         }
       } catch (error) {
         if (!cancelled) setMessage(error instanceof Error ? error.message : "Could not load sources.");
@@ -110,6 +141,21 @@ export default function ProjectSourcesPage() {
     void fetchLibrary();
     return () => { cancelled = true; };
   }, [debouncedSearch, filter, projectId]);
+
+  const hasActiveAnalysis = analysisJobs.some((job) => job.status === "queued" || job.status === "processing");
+  useEffect(() => {
+    if (!hasActiveAnalysis) return;
+    const interval = window.setInterval(() => {
+      void apiFetch(`/projects/${projectId}/analysis-jobs`)
+        .then((response) => {
+          if (!response.ok) throw new Error("Could not refresh analysis status.");
+          return response.json();
+        })
+        .then(setAnalysisJobs)
+        .catch(() => setMessage("Could not refresh analysis status."));
+    }, 1500);
+    return () => window.clearInterval(interval);
+  }, [hasActiveAnalysis, projectId]);
 
   function resetForm() {
     setEditingSource(null);
@@ -235,10 +281,58 @@ export default function ProjectSourcesPage() {
     await loadAttachments();
   }
 
+  async function startAnalysis(attachmentId: number) {
+    setMessage("");
+    setStartingAnalysisFor(attachmentId);
+    try {
+      const response = await apiFetch(
+        `/projects/${projectId}/attachments/${attachmentId}/analysis-jobs`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        setMessage(response.status === 422
+          ? "Analysis currently supports PDF and TXT files only."
+          : "Could not start analysis. Owners and editors can analyze source files.");
+        return;
+      }
+      const job = await response.json();
+      setAnalysisJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      await loadAnalysisJobs();
+    } catch {
+      setMessage("Could not reach the ResearchHub API while starting analysis.");
+    } finally {
+      setStartingAnalysisFor(null);
+    }
+  }
+
+  async function retryAnalysis(job: AnalysisJob) {
+    setMessage("");
+    setStartingAnalysisFor(job.attachment_id);
+    try {
+      const response = await apiFetch(
+        `/projects/${projectId}/analysis-jobs/${job.id}/retry`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        setMessage("Could not retry this analysis job.");
+        return;
+      }
+      await loadAnalysisJobs();
+    } catch {
+      setMessage("Could not reach the ResearchHub API while retrying analysis.");
+    } finally {
+      setStartingAnalysisFor(null);
+    }
+  }
+
   const attachmentsForSource = (sourceId: number) => attachments.filter(
     (attachment) => attachment.source_id === sourceId,
   );
   const projectFiles = attachments.filter((attachment) => attachment.source_id === null);
+  const latestAnalysisFor = (attachmentId: number) => analysisJobs.find(
+    (job) => job.attachment_id === attachmentId,
+  );
+  const canAnalyze = (attachment: Attachment) => /\.(pdf|txt)$/i.test(attachment.original_filename);
 
   return (
     <main className={styles.page}>
@@ -288,7 +382,19 @@ export default function ProjectSourcesPage() {
               {source.url && <a href={source.url} rel="noreferrer" target="_blank">Open source</a>}
               <section className={styles.attachments}>
                 <div className={styles.attachmentsHeader}><strong>Files</strong><label className={styles.uploadButton}>{uploadingSourceId === source.id ? "Uploading..." : "Upload file"}<input accept=".pdf,.csv,.tsv,.txt,.docx,.xlsx,.json" disabled={uploadingSourceId !== null} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAttachment(source.id, file); event.currentTarget.value = ""; }} type="file" /></label></div>
-                {attachmentsForSource(source.id).length === 0 ? <p>No attached files yet.</p> : <ul>{attachmentsForSource(source.id).map((attachment) => <li key={attachment.id}><span><b>{attachment.original_filename}</b><small>{formatFileSize(attachment.size_bytes)}</small></span><div><button onClick={() => void downloadAttachment(attachment)} type="button">Download</button><button className={styles.danger} onClick={() => void deleteAttachment(attachment.id)} type="button">Delete</button></div></li>)}</ul>}
+                {attachmentsForSource(source.id).length === 0 ? <p>No attached files yet.</p> : <ul>{attachmentsForSource(source.id).map((attachment) => {
+                  const job = latestAnalysisFor(attachment.id);
+                  const isActive = job?.status === "queued" || job?.status === "processing";
+                  return <li key={attachment.id}>
+                    <div className={styles.fileRow}><span><b>{attachment.original_filename}</b><small>{formatFileSize(attachment.size_bytes)}</small></span><div>{canAnalyze(attachment) && <button disabled={isActive || startingAnalysisFor === attachment.id} onClick={() => void startAnalysis(attachment.id)} type="button">{startingAnalysisFor === attachment.id ? "Starting..." : isActive ? "Preparing..." : job?.status === "completed" ? "Prepare again" : "Prepare for AI"}</button>}<button onClick={() => void downloadAttachment(attachment)} type="button">Download</button><button className={styles.danger} onClick={() => void deleteAttachment(attachment.id)} type="button">Delete</button></div></div>
+                    {job && <div className={`${styles.analysisResult} ${styles[job.status]}`}>
+                      <div><strong>{job.status === "completed" ? "AI-ready extraction" : `Analysis ${job.status}`}</strong><small>Attempt {job.attempt}</small></div>
+                      {job.result && <><p>{job.result.word_count.toLocaleString()} words · {job.result.character_count.toLocaleString()} characters{job.result.page_count !== null ? ` · ${job.result.page_count} pages` : ""}{job.result.truncated ? " · extraction capped" : ""}</p><blockquote>{job.result.text_preview}</blockquote></>}
+                      {job.error_message && <p>{job.error_message}</p>}
+                      {job.status === "failed" && <button onClick={() => void retryAnalysis(job)} type="button">Retry extraction</button>}
+                    </div>}
+                  </li>;
+                })}</ul>}
               </section>
               <footer><time dateTime={source.updated_at}>Updated {new Date(source.updated_at).toLocaleDateString()}</time><div><button onClick={() => beginEdit(source)} type="button">Edit</button><button className={styles.danger} onClick={() => deleteSource(source.id)} type="button">Delete</button></div></footer>
             </article>

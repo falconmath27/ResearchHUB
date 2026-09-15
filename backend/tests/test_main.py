@@ -1,12 +1,15 @@
 from app.main import app, validate_project_title
+from io import BytesIO
 import pytest
 from fastapi.testclient import TestClient
 from app.schemas import ProjectCreate, SourceCreate, UserCreate
 from pydantic import ValidationError
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from sqlalchemy import delete, func, inspect, select, text
 from app.database import engine, SessionLocal
-from app.models import AccountRecoveryRequestRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from app.models import AccountRecoveryRequestRecord, AnalysisJobRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
 
 
 from app.security import hash_password, verify_password
@@ -17,6 +20,7 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def reset_projects() -> None:
     with SessionLocal() as session:
+        session.execute(delete(AnalysisJobRecord))
         session.execute(delete(AttachmentRecord))
         session.execute(delete(NoteVersionRecord))
         session.execute(delete(PasswordResetTokenRecord))
@@ -703,6 +707,161 @@ def test_project_attachment_rejects_unapproved_file_type() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_text_attachment_analysis_job_extracts_content() -> None:
+    create_test_project()
+    upload_response = client.post(
+        "/projects/1/attachments",
+        files={"file": ("findings.txt", b"ResearchHub extracts this evidence for a later AI analysis stage.", "text/plain")},
+    )
+    attachment_id = upload_response.json()["id"]
+
+    create_response = client.post(
+        f"/projects/1/attachments/{attachment_id}/analysis-jobs"
+    )
+    list_response = client.get(
+        f"/projects/1/analysis-jobs?attachment_id={attachment_id}"
+    )
+
+    assert create_response.status_code == 202
+    assert create_response.json()["status"] == "queued"
+    assert list_response.status_code == 200
+    completed_job = list_response.json()[0]
+    assert completed_job["status"] == "completed"
+    assert completed_job["result"]["stage"] == "extraction_complete"
+    assert completed_job["result"]["file_type"] == "txt"
+    assert completed_job["result"]["word_count"] == 10
+    assert "ResearchHub extracts" in completed_job["result"]["text_preview"]
+
+
+def test_pdf_attachment_analysis_job_extracts_embedded_text() -> None:
+    pdf_buffer = BytesIO()
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    })
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)}),
+    })
+    content = DecodedStreamObject()
+    content.set_data(b"BT /F1 12 Tf 72 720 Td (ResearchHub PDF evidence extraction works.) Tj ET")
+    page[NameObject("/Contents")] = writer._add_object(content)
+    writer.write(pdf_buffer)
+
+    create_test_project()
+    upload_response = client.post(
+        "/projects/1/attachments",
+        files={"file": ("paper.pdf", pdf_buffer.getvalue(), "application/pdf")},
+    )
+    attachment_id = upload_response.json()["id"]
+    client.post(f"/projects/1/attachments/{attachment_id}/analysis-jobs")
+    completed_job = client.get(
+        f"/projects/1/analysis-jobs?attachment_id={attachment_id}"
+    ).json()[0]
+
+    assert completed_job["status"] == "completed"
+    assert completed_job["result"]["file_type"] == "pdf"
+    assert completed_job["result"]["page_count"] == 1
+    assert "ResearchHub PDF evidence" in completed_job["result"]["text_preview"]
+
+
+def test_analysis_job_failure_is_safe_and_can_be_retried() -> None:
+    create_test_project()
+    upload_response = client.post(
+        "/projects/1/attachments",
+        files={"file": ("empty.txt", b"   ", "text/plain")},
+    )
+    attachment_id = upload_response.json()["id"]
+    client.post(f"/projects/1/attachments/{attachment_id}/analysis-jobs")
+    failed_job = client.get(
+        f"/projects/1/analysis-jobs?attachment_id={attachment_id}"
+    ).json()[0]
+
+    retry_response = client.post(
+        f"/projects/1/analysis-jobs/{failed_job['id']}/retry"
+    )
+    jobs = client.get(
+        f"/projects/1/analysis-jobs?attachment_id={attachment_id}"
+    ).json()
+
+    assert failed_job["status"] == "failed"
+    assert failed_job["error_code"] == "no_extractable_text"
+    assert failed_job["error_message"] == "No usable text could be extracted from this file."
+    assert retry_response.status_code == 202
+    assert retry_response.json()["parent_job_id"] == failed_job["id"]
+    assert retry_response.json()["attempt"] == 2
+    assert jobs[0]["status"] == "failed"
+    assert len(jobs) == 2
+
+
+def test_analysis_job_creation_reuses_an_active_job() -> None:
+    create_test_project()
+    upload_response = client.post(
+        "/projects/1/attachments",
+        files={"file": ("queued.txt", b"Enough queued research text for extraction processing.", "text/plain")},
+    )
+    attachment_id = upload_response.json()["id"]
+    with SessionLocal() as session:
+        existing_job = AnalysisJobRecord(
+            project_id=1,
+            attachment_id=attachment_id,
+            requested_by_id=1,
+            status="queued",
+            attempt=1,
+            active_key=f"attachment:{attachment_id}",
+        )
+        session.add(existing_job)
+        session.commit()
+        existing_id = existing_job.id
+
+    response = client.post(
+        f"/projects/1/attachments/{attachment_id}/analysis-jobs"
+    )
+
+    assert response.status_code == 202
+    assert response.json()["id"] == existing_id
+    with SessionLocal() as session:
+        assert session.scalar(select(func.count(AnalysisJobRecord.id))) == 1
+
+
+def test_analysis_rejects_unsupported_attachment_and_viewer_creation() -> None:
+    create_test_project()
+    csv_upload = client.post(
+        "/projects/1/attachments",
+        files={"file": ("data.csv", b"value\n1\n", "text/csv")},
+    )
+    unsupported_response = client.post(
+        f"/projects/1/attachments/{csv_upload.json()['id']}/analysis-jobs"
+    )
+
+    txt_upload = client.post(
+        "/projects/1/attachments",
+        files={"file": ("paper.txt", b"A sufficiently long research document for analysis.", "text/plain")},
+    )
+    client.post("/auth/register", json={
+        "name": "Read Only",
+        "email": "reader@example.com",
+        "password": "securepass123",
+    })
+    client.post("/projects/1/members", json={"email": "reader@example.com", "role": "viewer"})
+    login_response = client.post("/auth/login", json={
+        "email": "reader@example.com",
+        "password": "securepass123",
+    })
+    viewer_headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+    denied_response = client.post(
+        f"/projects/1/attachments/{txt_upload.json()['id']}/analysis-jobs",
+        headers=viewer_headers,
+    )
+    list_response = client.get("/projects/1/analysis-jobs", headers=viewer_headers)
+
+    assert unsupported_response.status_code == 422
+    assert denied_response.status_code == 403
+    assert list_response.status_code == 200
 
 
 def test_viewer_cannot_upload_project_attachments() -> None:

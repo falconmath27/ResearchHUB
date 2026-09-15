@@ -503,3 +503,57 @@ Each user now has a `token_version`. JWTs carry the version that existed when th
 Interview answer: “I split password reset from identity recovery. Password reset uses enumeration-safe responses, rate-limited requests, hashed single-use tokens, expiration, and a token-version change that revokes old JWTs. Losing the email becomes a manual support case with a high-entropy reference code; it never automatically reveals or transfers the account. The email provider and restricted support console remain explicit production boundaries rather than insecure shortcuts.”
 
 Migration `20260915_0009` adds token-version session revocation, reset-attempt fingerprints, password-reset tokens, and manual recovery requests. The backend suite has 62 passing tests. Targeted authentication lint and the optimized frontend build pass, including the new `/auth/reset` route.
+
+## AI Source Analysis: Durable Job Contract and Text Extraction
+
+ResearchHub now has the provider-independent foundation for AI source analysis. Owners and editors can prepare an attached PDF or TXT file from the source library, while every project member can inspect job status and extraction results. This slice deliberately labels successful output as **AI-ready extraction**: no model is connected yet, so the application does not misrepresent deterministic document processing as an AI-generated summary.
+
+### Explicit Job State Machine
+
+`analysis_jobs` stores each request with one of four states:
+
+1. `queued`: the API accepted and persisted the request.
+2. `processing`: one worker claimed the job and started extracting text.
+3. `completed`: bounded, usable text and document metadata were persisted successfully.
+4. `failed`: extraction stopped safely with a stable error code and a user-safe message.
+
+- The job is committed before background work begins. The HTTP request can therefore return `202 Accepted` with a job ID instead of keeping a slow extraction operation inside the request transaction.
+- `started_at` and `completed_at` make queue delay and processing duration measurable. `attempt`, `parent_job_id`, and immutable job rows preserve retry history rather than overwriting the original failure.
+- Results include file type, PDF page count when applicable, character count, word count, truncation state, extracted text, and a 1,000-character UI preview.
+- The frontend polls every 1.5 seconds only while at least one job is queued or processing. Polling stops automatically for terminal states, avoiding permanent background traffic.
+
+### Concurrency-Safe Deduplication and Retry
+
+- An active job has an `active_key` derived from its attachment. A unique constraint on `(project_id, active_key)` permits only one queued or processing job per attachment in a project.
+- The route first reuses an existing active job for normal idempotency. The database constraint remains the final authority when simultaneous requests race; the losing transaction rolls back and returns the winning job.
+- Terminal jobs clear `active_key`, allowing a deliberate new extraction. Failed jobs can be retried through a dedicated endpoint, which creates a new attempt linked to the failed parent.
+- Only a `failed` job can use the retry endpoint. This prevents ambiguous retries of running or already successful work.
+
+### Extraction Safety
+
+- TXT files must use UTF-8 (including UTF-8 with a byte-order mark). Invalid encodings fail with a stable `invalid_text_encoding` code rather than silently corrupting evidence.
+- PDFs are parsed with `pypdf`. Encrypted PDFs, unreadable PDFs, files without useful embedded text, and PDFs over 200 pages fail with specific safe errors.
+- Extracted content is capped at 500,000 characters. Counts describe the full cleaned text, while the stored extraction is bounded and marked `truncated` when the cap applies.
+- The processor removes null characters and normalizes excessive whitespace before measuring and storing text. It never returns Python exceptions, filesystem paths, database details, or stack traces to the browser.
+- Unexpected failures are logged server-side with the job ID, while users receive the generic `internal_error` message. Expected document failures use stable codes that a future UI or support system can translate.
+
+### Authorization and Data Boundaries
+
+- Owners and editors can start and retry analysis because processing creates project data and may later consume paid model capacity. Viewers can inspect job state and results but cannot initiate work.
+- Every route validates both project membership and the attachment's project scope. Numeric attachment or job IDs cannot cross a project boundary.
+- Deleting an attachment cascades to its analysis history. This matches the current evidence-retention decision: extracted document text should not survive deletion of the private source file from which it came.
+- Only PDF and TXT attachments are accepted in this first slice. Other upload types remain downloadable but receive `422` if submitted for analysis.
+
+### Tradeoffs, Risks, and Production Evolution
+
+- **FastAPI background tasks are an MVP executor, not a durable queue:** they provide the asynchronous API contract without operating Redis or a worker service, but a server crash can strand a job in `queued` or `processing`. Production should use Celery, Dramatiq, RQ, or a managed queue, with leases, heartbeat timestamps, retry backoff, a dead-letter queue, and a watchdog that recovers abandoned jobs.
+- **Database state is the source of truth:** frontend polling can disconnect without losing the job. A later WebSocket or server-sent-events channel can reduce polling latency without changing the job contract.
+- **Full extracted text is stored per completed attempt:** this makes the next model stage reproducible and easy to inspect, but repeat jobs increase storage. Production should deduplicate extraction by attachment content hash, encrypt sensitive text at rest, define retention, and store large text or chunks outside the transactional row.
+- **No OCR yet:** `pypdf` extracts embedded text but scanned-image PDFs will produce `no_extractable_text`. OCR needs a sandboxed, resource-limited service and language configuration rather than being hidden inside the API process.
+- **Parser isolation:** PDF parsers process untrusted files. The 20 MB upload cap and 200-page extraction cap limit resource use, but production should isolate parsing in a constrained worker/container, enforce CPU and memory limits, keep dependencies patched, and malware-scan uploads.
+- **Prompt injection is the next-stage threat:** extracted papers are untrusted data. When a model provider is connected, document instructions must never override the system task, request secrets, invoke tools, or trigger external actions. Outputs need provenance and citations back to source chunks.
+- **No AI claims yet:** `completed` currently means extraction completed, not that an LLM produced findings. The next migration can add an analysis stage or job type without changing the queue, authorization, retry, or observability foundations.
+
+Interview answer: “I separated the analysis request from execution with a persisted four-state job model. I used a nullable active-key uniqueness constraint to make job creation idempotent under concurrency, preserved retries as linked attempts, and exposed only stable failure codes. The MVP executor is FastAPI BackgroundTasks, but the database contract is designed to move to a durable worker queue. Text extraction is bounded, project-authorized, and explicitly presented as AI-ready rather than fabricated AI output.”
+
+Migration `20260915_0010` creates the analysis job ledger and its project/attachment and project/status indexes. The backend suite has 67 passing tests, including successful TXT and generated-PDF extraction, safe extraction failure, retry lineage, active-job reuse, unsupported-file rejection, and viewer authorization. Full frontend lint, TypeScript checking, and the optimized production build pass.
