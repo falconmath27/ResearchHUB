@@ -38,4 +38,6 @@ UPLOAD_DIRECTORY = Path(
     )
 ).resolve()
 MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".csv", ".tsv", ".txt", ".docx", ".xlsx", ".json"}

@@ -735,6 +735,88 @@ def test_text_attachment_analysis_job_extracts_content() -> None:
     assert "ResearchHub extracts" in completed_job["result"]["text_preview"]
 
 
+def test_ai_analysis_requires_configuration_and_completed_extraction(monkeypatch) -> None:
+    create_test_project()
+    upload = client.post(
+        "/projects/1/attachments",
+        files={"file": ("study.txt", b"A sufficiently long research study with clear findings.", "text/plain")},
+    )
+    attachment_id = upload.json()["id"]
+    response = client.post(f"/projects/1/attachments/{attachment_id}/ai-analysis-jobs")
+    assert response.status_code == 503
+
+    monkeypatch.setattr("app.main.OPENAI_API_KEY", "test-key")
+    response = client.post(f"/projects/1/attachments/{attachment_id}/ai-analysis-jobs")
+    assert response.status_code == 409
+
+
+def test_ai_analysis_saves_cited_result_without_live_api(monkeypatch) -> None:
+    from app import ai_analysis
+
+    create_test_project()
+    upload = client.post(
+        "/projects/1/attachments",
+        files={"file": ("study.txt", b"The study found a measurable improvement in research collaboration across teams.", "text/plain")},
+    )
+    attachment_id = upload.json()["id"]
+    client.post(f"/projects/1/attachments/{attachment_id}/analysis-jobs")
+    monkeypatch.setattr("app.main.OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_analysis, "OPENAI_API_KEY", "test-key")
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "completed", "output": [{"type": "message", "content": [{
+                "type": "output_text", "text": '{"summary":"Team collaboration improved.","summary_passage_ids":["P1"],"findings":[{"claim":"Collaboration improved.","passage_ids":["P1"]}],"limitations":[]}',
+            }]}]}
+
+    def fake_post(url, **kwargs):
+        assert kwargs["json"]["store"] is False
+        assert len(kwargs["json"]["input"]) < 25_000
+        return FakeResponse()
+
+    monkeypatch.setattr(ai_analysis.httpx, "post", fake_post)
+    queued = client.post(f"/projects/1/attachments/{attachment_id}/ai-analysis-jobs")
+    completed = client.get(f"/projects/1/analysis-jobs/{queued.json()['id']}").json()
+    assert queued.status_code == 202
+    assert completed["kind"] == "ai"
+    assert completed["status"] == "completed"
+    assert completed["result"]["findings"][0]["passage_ids"] == ["P1"]
+    assert completed["result"]["passages"][0]["text"].startswith("The study found")
+
+
+def test_ai_analysis_rejects_fabricated_passage_id(monkeypatch) -> None:
+    from app import ai_analysis
+
+    create_test_project()
+    upload = client.post(
+        "/projects/1/attachments",
+        files={"file": ("study.txt", b"A sufficiently long source document for evidence checking.", "text/plain")},
+    )
+    attachment_id = upload.json()["id"]
+    client.post(f"/projects/1/attachments/{attachment_id}/analysis-jobs")
+    monkeypatch.setattr("app.main.OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_analysis, "OPENAI_API_KEY", "test-key")
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "completed", "output": [{"type": "message", "content": [{
+                "type": "output_text", "text": '{"summary":"Unsupported.","summary_passage_ids":["P999"],"findings":[{"claim":"Unsupported.","passage_ids":["P999"]}],"limitations":[]}',
+            }]}]}
+
+    monkeypatch.setattr(ai_analysis.httpx, "post", lambda *args, **kwargs: FakeResponse())
+    queued = client.post(f"/projects/1/attachments/{attachment_id}/ai-analysis-jobs")
+    failed = client.get(f"/projects/1/analysis-jobs/{queued.json()['id']}").json()
+    assert failed["status"] == "failed"
+    assert failed["result"] is None
+    assert failed["error_code"] == "ai_analysis_failed"
+
+
 def test_pdf_attachment_analysis_job_extracts_embedded_text() -> None:
     pdf_buffer = BytesIO()
     writer = PdfWriter()

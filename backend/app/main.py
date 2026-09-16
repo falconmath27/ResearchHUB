@@ -54,6 +54,8 @@ from .config import (
 from .database import SessionLocal
 from .models import AccountRecoveryRequestRecord, AnalysisJobRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
 from .analysis import AnalysisExtractionError, extract_attachment_text
+from .ai_analysis import analyze_attachment
+from .config import OPENAI_API_KEY
 from fastapi.middleware.cors import CORSMiddleware
 from .security import create_access_token, get_access_token_identity, hash_password, verify_password
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -253,6 +255,7 @@ def analysis_job_to_response(record: AnalysisJobRecord) -> AnalysisJob:
         requested_by_id=record.requested_by_id,
         parent_job_id=record.parent_job_id,
         status=record.status,
+        kind=record.kind,
         attempt=record.attempt,
         result=record.result,
         error_code=record.error_code,
@@ -278,6 +281,7 @@ def process_analysis_job(job_id: int) -> None:
         job = session.get(AnalysisJobRecord, job_id)
         attachment = session.get(AttachmentRecord, job.attachment_id) if job is not None else None
         stored_filename = attachment.stored_filename if attachment is not None else None
+        kind = job.kind if job is not None else "extraction"
 
     try:
         if stored_filename is None:
@@ -285,7 +289,8 @@ def process_analysis_job(job_id: int) -> None:
                 "attachment_missing",
                 "The uploaded file is no longer available.",
             )
-        result = extract_attachment_text(attachment_file_path(stored_filename))
+        file_path = attachment_file_path(stored_filename)
+        result = analyze_attachment(file_path) if kind == "ai" else extract_attachment_text(file_path)
         with SessionLocal() as session:
             session.execute(
                 update(AnalysisJobRecord)
@@ -326,7 +331,7 @@ def process_analysis_job(job_id: int) -> None:
                     active_key=None,
                     result=None,
                     error_code="internal_error",
-                    error_message="The document could not be prepared for analysis.",
+                    error_message="The document could not be analyzed safely.",
                     completed_at=datetime.now(timezone.utc),
                 )
             )
@@ -1124,6 +1129,7 @@ async def create_analysis_job(
             attachment_id=attachment_id,
             requested_by_id=current_user.id,
             status="queued",
+            kind="extraction",
             attempt=next_attempt,
             active_key=active_key,
         )
@@ -1138,6 +1144,72 @@ async def create_analysis_job(
                     AnalysisJobRecord.active_key == active_key,
                 )
             )
+            if active_job is None:
+                raise
+            return analysis_job_to_response(active_job)
+        session.refresh(job)
+        background_tasks.add_task(process_analysis_job, job.id)
+        return analysis_job_to_response(job)
+
+
+@app.post(
+    "/projects/{project_id}/attachments/{attachment_id}/ai-analysis-jobs",
+    status_code=202,
+    response_model=AnalysisJob,
+)
+async def create_ai_analysis_job(
+    project_id: int,
+    attachment_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: UserRecord = Depends(get_authenticated_user),
+) -> AnalysisJob:
+    active_key = f"ai:{attachment_id}"
+    with SessionLocal() as session:
+        if session.get(ProjectRecord, project_id) is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_editor(session, project_id, current_user.id)
+        attachment = session.get(AttachmentRecord, attachment_id)
+        if attachment is None or attachment.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        if not attachment.original_filename.lower().endswith((".pdf", ".txt")):
+            raise HTTPException(status_code=422, detail="AI analysis supports PDF and TXT files only.")
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=503, detail="AI analysis is not configured on this server.")
+        extraction = session.scalar(
+            select(AnalysisJobRecord).where(
+                AnalysisJobRecord.attachment_id == attachment_id,
+                AnalysisJobRecord.project_id == project_id,
+                AnalysisJobRecord.kind == "extraction",
+                AnalysisJobRecord.status == "completed",
+            ).order_by(AnalysisJobRecord.id.desc())
+        )
+        if extraction is None:
+            raise HTTPException(status_code=409, detail="Prepare this file before AI analysis.")
+        active_job = session.scalar(select(AnalysisJobRecord).where(
+            AnalysisJobRecord.project_id == project_id,
+            AnalysisJobRecord.active_key == active_key,
+        ))
+        if active_job is not None:
+            return analysis_job_to_response(active_job)
+        attempt = (session.scalar(select(func.max(AnalysisJobRecord.attempt)).where(
+            AnalysisJobRecord.project_id == project_id,
+            AnalysisJobRecord.attachment_id == attachment_id,
+            AnalysisJobRecord.kind == "ai",
+        )) or 0) + 1
+        job = AnalysisJobRecord(
+            project_id=project_id, attachment_id=attachment_id, requested_by_id=current_user.id,
+            parent_job_id=extraction.id, kind="ai", status="queued", attempt=attempt,
+            active_key=active_key,
+        )
+        session.add(job)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            active_job = session.scalar(select(AnalysisJobRecord).where(
+                AnalysisJobRecord.project_id == project_id,
+                AnalysisJobRecord.active_key == active_key,
+            ))
             if active_job is None:
                 raise
             return analysis_job_to_response(active_job)
@@ -1201,7 +1273,10 @@ async def retry_analysis_job(
         if previous_job.status != "failed":
             raise HTTPException(status_code=409, detail="Only failed analysis jobs can be retried.")
 
-        active_key = f"attachment:{previous_job.attachment_id}"
+        prefix = "ai" if previous_job.kind == "ai" else "attachment"
+        active_key = f"{prefix}:{previous_job.attachment_id}"
+        if previous_job.kind == "ai" and not OPENAI_API_KEY:
+            raise HTTPException(status_code=503, detail="AI analysis is not configured on this server.")
         active_job = session.scalar(
             select(AnalysisJobRecord).where(
                 AnalysisJobRecord.project_id == project_id,
@@ -1217,6 +1292,7 @@ async def retry_analysis_job(
             requested_by_id=current_user.id,
             parent_job_id=previous_job.id,
             status="queued",
+            kind=previous_job.kind,
             attempt=previous_job.attempt + 1,
             active_key=active_key,
         )

@@ -32,18 +32,25 @@ type Attachment = {
 type AnalysisJobStatus = "queued" | "processing" | "completed" | "failed";
 type AnalysisResult = {
   stage: string;
-  file_type: string;
-  page_count: number | null;
-  character_count: number;
-  word_count: number;
-  truncated: boolean;
-  text_preview: string;
+  file_type?: string;
+  page_count?: number | null;
+  character_count?: number;
+  word_count?: number;
+  truncated?: boolean;
+  text_preview?: string;
+  model?: string;
+  summary?: string;
+  summary_passage_ids?: string[];
+  findings?: { claim: string; passage_ids: string[] }[];
+  limitations?: string[];
+  passages?: { id: string; page: number | null; text: string }[];
 };
 type AnalysisJob = {
   id: number;
   attachment_id: number;
   parent_job_id: number | null;
   status: AnalysisJobStatus;
+  kind: "extraction" | "ai";
   attempt: number;
   result: AnalysisResult | null;
   error_message: string | null;
@@ -325,12 +332,34 @@ export default function ProjectSourcesPage() {
     }
   }
 
+  async function startAiAnalysis(attachmentId: number) {
+    if (!window.confirm("This sends selected passages from this private source to OpenAI for analysis. Continue?")) return;
+    setMessage("");
+    setStartingAnalysisFor(attachmentId);
+    try {
+      const response = await apiFetch(
+        `/projects/${projectId}/attachments/${attachmentId}/ai-analysis-jobs`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        setMessage(body?.detail ?? "Could not start AI analysis.");
+        return;
+      }
+      await loadAnalysisJobs();
+    } catch {
+      setMessage("Could not reach the ResearchHub API while starting AI analysis.");
+    } finally {
+      setStartingAnalysisFor(null);
+    }
+  }
+
   const attachmentsForSource = (sourceId: number) => attachments.filter(
     (attachment) => attachment.source_id === sourceId,
   );
   const projectFiles = attachments.filter((attachment) => attachment.source_id === null);
-  const latestAnalysisFor = (attachmentId: number) => analysisJobs.find(
-    (job) => job.attachment_id === attachmentId,
+  const latestAnalysisFor = (attachmentId: number, kind: AnalysisJob["kind"]) => analysisJobs.find(
+    (job) => job.attachment_id === attachmentId && job.kind === kind,
   );
   const canAnalyze = (attachment: Attachment) => /\.(pdf|txt)$/i.test(attachment.original_filename);
 
@@ -383,15 +412,23 @@ export default function ProjectSourcesPage() {
               <section className={styles.attachments}>
                 <div className={styles.attachmentsHeader}><strong>Files</strong><label className={styles.uploadButton}>{uploadingSourceId === source.id ? "Uploading..." : "Upload file"}<input accept=".pdf,.csv,.tsv,.txt,.docx,.xlsx,.json" disabled={uploadingSourceId !== null} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAttachment(source.id, file); event.currentTarget.value = ""; }} type="file" /></label></div>
                 {attachmentsForSource(source.id).length === 0 ? <p>No attached files yet.</p> : <ul>{attachmentsForSource(source.id).map((attachment) => {
-                  const job = latestAnalysisFor(attachment.id);
+                  const job = latestAnalysisFor(attachment.id, "extraction");
+                  const aiJob = latestAnalysisFor(attachment.id, "ai");
                   const isActive = job?.status === "queued" || job?.status === "processing";
+                  const aiActive = aiJob?.status === "queued" || aiJob?.status === "processing";
                   return <li key={attachment.id}>
-                    <div className={styles.fileRow}><span><b>{attachment.original_filename}</b><small>{formatFileSize(attachment.size_bytes)}</small></span><div>{canAnalyze(attachment) && <button disabled={isActive || startingAnalysisFor === attachment.id} onClick={() => void startAnalysis(attachment.id)} type="button">{startingAnalysisFor === attachment.id ? "Starting..." : isActive ? "Preparing..." : job?.status === "completed" ? "Prepare again" : "Prepare for AI"}</button>}<button onClick={() => void downloadAttachment(attachment)} type="button">Download</button><button className={styles.danger} onClick={() => void deleteAttachment(attachment.id)} type="button">Delete</button></div></div>
+                    <div className={styles.fileRow}><span><b>{attachment.original_filename}</b><small>{formatFileSize(attachment.size_bytes)}</small></span><div>{canAnalyze(attachment) && <button disabled={isActive || startingAnalysisFor === attachment.id} onClick={() => void startAnalysis(attachment.id)} type="button">{startingAnalysisFor === attachment.id ? "Starting..." : isActive ? "Preparing..." : job?.status === "completed" ? "Prepare again" : "Prepare for AI"}</button>}{job?.status === "completed" && <button disabled={aiActive || startingAnalysisFor === attachment.id} onClick={() => void startAiAnalysis(attachment.id)} type="button">{aiActive ? "Analyzing..." : "Analyze with AI"}</button>}<button onClick={() => void downloadAttachment(attachment)} type="button">Download</button><button className={styles.danger} onClick={() => void deleteAttachment(attachment.id)} type="button">Delete</button></div></div>
                     {job && <div className={`${styles.analysisResult} ${styles[job.status]}`}>
                       <div><strong>{job.status === "completed" ? "AI-ready extraction" : `Analysis ${job.status}`}</strong><small>Attempt {job.attempt}</small></div>
-                      {job.result && <><p>{job.result.word_count.toLocaleString()} words · {job.result.character_count.toLocaleString()} characters{job.result.page_count !== null ? ` · ${job.result.page_count} pages` : ""}{job.result.truncated ? " · extraction capped" : ""}</p><blockquote>{job.result.text_preview}</blockquote></>}
+                      {job.result && <><p>{job.result.word_count?.toLocaleString()} words · {job.result.character_count?.toLocaleString()} characters{job.result.page_count != null ? ` · ${job.result.page_count} pages` : ""}{job.result.truncated ? " · extraction capped" : ""}</p><blockquote>{job.result.text_preview}</blockquote></>}
                       {job.error_message && <p>{job.error_message}</p>}
                       {job.status === "failed" && <button onClick={() => void retryAnalysis(job)} type="button">Retry extraction</button>}
+                    </div>}
+                    {aiJob && <div className={`${styles.analysisResult} ${styles[aiJob.status]}`}>
+                      <div><strong>{aiJob.status === "completed" ? "AI source analysis" : `AI analysis ${aiJob.status}`}</strong><small>Attempt {aiJob.attempt}</small></div>
+                      {aiJob.result?.summary && <><p>{aiJob.result.summary} <small>({aiJob.result.summary_passage_ids?.join(", ")})</small></p><ol>{aiJob.result.findings?.map((finding, index) => <li key={index}>{finding.claim} <small>({finding.passage_ids.join(", ")})</small></li>)}</ol>{Boolean(aiJob.result.limitations?.length) && <p>Limitations: {aiJob.result.limitations?.join("; ")}</p>}<details><summary>View cited evidence</summary>{aiJob.result.passages?.map((passage) => <blockquote key={passage.id}><strong>{passage.id}{passage.page ? ` · page ${passage.page}` : ""}</strong><br />{passage.text}</blockquote>)}</details><small>AI-generated; verify claims against the original source.</small></>}
+                      {aiJob.error_message && <p>{aiJob.error_message}</p>}
+                      {aiJob.status === "failed" && <button onClick={() => void retryAnalysis(aiJob)} type="button">Retry AI analysis</button>}
                     </div>}
                   </li>;
                 })}</ul>}

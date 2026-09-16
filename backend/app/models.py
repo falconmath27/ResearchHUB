@@ -204,6 +204,7 @@ class AnalysisJobRecord(Base):
         ForeignKey("analysis_jobs.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[str] = mapped_column(String(20), default="queued")
+    kind: Mapped[str] = mapped_column(String(20), default="extraction")
     attempt: Mapped[int] = mapped_column(default=1)
     active_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)

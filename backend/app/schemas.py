@@ -309,6 +309,7 @@ class AnalysisJob(BaseModel):
     requested_by_id: int
     parent_job_id: int | None
     status: AnalysisJobStatus
+    kind: Literal["extraction", "ai"]
     attempt: int
     result: dict[str, object] | None
     error_code: str | None
