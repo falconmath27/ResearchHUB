@@ -467,13 +467,15 @@ ResearchHub now separates two account-loss scenarios instead of treating them as
 
 ### Password Reset Workflow
 
-- `POST /auth/password-reset/request` always returns `202 Accepted` and the same message for registered and unregistered emails. This prevents attackers from using the endpoint to enumerate ResearchHub accounts.
+- `POST /auth/password-reset/request` issues a reset link only for a registered account. A syntactically valid but unknown email receives `404` and the frontend offers a direct path to registration, matching the chosen product requirement.
+- Pydantic still performs standard email syntax validation. ResearchHub additionally rejects a small allow-list of common provider-domain mistakes such as `gmalil.com` and `gmial.com` with a “Did you mean `@gmail.com`?” message. This check also runs during registration so users do not accidentally create an unreachable account.
 - The backend generates reset tokens with a cryptographically secure random generator. Only a SHA-256 hash is stored in `password_reset_tokens`; possession of the database alone does not reveal a usable reset link.
 - Reset tokens expire after 30 minutes and are single-use. Requesting another token invalidates previous unused tokens for that account, reducing the window created by old emails or copied links.
 - The reset page reads the token once and removes it from the visible URL and browser history. This reduces accidental disclosure through copied URLs, screenshots, analytics, or referrer headers.
 - `POST /auth/password-reset/confirm` changes the Argon2 password hash and consumes every outstanding token for that user in the same database transaction. Invalid, expired, or previously used tokens receive one generic failure response.
-- Requests are limited to three token issuances per email fingerprint per hour. The fingerprint is an HMAC made with the server secret, so unknown email addresses do not need to be stored in plaintext merely to enforce rate limits. Rate-limited requests still receive the same public response.
-- In local `development` delivery mode, the API returns a reset URL so the complete flow can be demonstrated without an email account. Even unknown emails receive a plausible but unusable development token, preserving response-shape privacy.
+- Requests are limited to three token issuances per email fingerprint per hour. The fingerprint is an HMAC made with the server secret, so the rate-limit ledger does not store the account email in plaintext. A fourth request receives an explicit `429` response.
+- In local `development` delivery mode, the API returns a reset URL so the complete flow can be demonstrated without an email account. Only registered accounts receive this URL.
+- When a reset token arrives in a URL, the form keeps it in component state but does not display it as an editable text field. It also removes the query string from browser history after reading it.
 - `PASSWORD_RESET_DELIVERY_MODE=email` removes the token from the response and fails closed. A production deployment must connect a transactional email provider before enabling this mode; reset tokens must never be logged or returned to a production browser.
 
 ### Session Revocation
@@ -495,12 +497,14 @@ Each user now has a `token_version`. JWTs carry the version that existed when th
 ### Tradeoffs, Risks, and Mitigations
 
 - **Email delivery is an adapter boundary:** secure token creation and consumption are implemented, but ResearchHub intentionally does not fake production delivery. A provider such as Amazon SES, Postmark, or Resend should be integrated through a background job with retry and delivery-event handling.
+- **Account discovery tradeoff:** explicitly telling users that an email is not registered improves recovery usability but permits account enumeration. This is an intentional product choice requested for the current platform. Before public deployment, mitigate it with strong per-IP and per-account rate limits, bot detection, monitoring, neutral copy where appropriate, and reconsider enumeration-safe responses for higher-risk deployments.
+- **Provider typo detection is heuristic:** `gmalil.com` is syntactically a valid address, so ordinary email validation cannot reject it. The correction list catches common consumer-provider mistakes without blocking legitimate university or company domains. Production registration should additionally verify ownership by sending a confirmation email; DNS checks alone do not prove that a mailbox exists.
 - **Database-backed rate limiting:** it works across multiple API instances and survives restarts, unlike an in-memory counter. Old attempt rows need periodic retention cleanup; an API gateway or Redis limiter should additionally enforce per-IP and global abuse controls.
 - **Hashing reset tokens:** random high-entropy tokens do not require slow password hashing, so SHA-256 is appropriate and efficient. Passwords still use Argon2 because human-created passwords have far less entropy and need expensive hashing.
 - **Manual recovery avoids unsafe automation:** account recovery is slower for a user who lost their email, but it avoids an automated flow that could disclose private accounts or let weak biographical guesses take over a workspace.
 - **Reference-code status lookup:** requiring both the random code and contact email provides practical case tracking. Production should also expire or archive old cases and avoid putting sensitive case details in the status response.
 
-Interview answer: “I split password reset from identity recovery. Password reset uses enumeration-safe responses, rate-limited requests, hashed single-use tokens, expiration, and a token-version change that revokes old JWTs. Losing the email becomes a manual support case with a high-entropy reference code; it never automatically reveals or transfers the account. The email provider and restricted support console remain explicit production boundaries rather than insecure shortcuts.”
+Interview answer: “I split password reset from identity recovery. Password reset uses registered-account checks, typo guidance, rate-limited requests, hashed single-use tokens, expiration, and a token-version change that revokes old JWTs. I documented the usability-versus-enumeration tradeoff of revealing unknown accounts. Losing the email becomes a manual support case with a high-entropy reference code; it never automatically transfers the account.”
 
 Migration `20260915_0009` adds token-version session revocation, reset-attempt fingerprints, password-reset tokens, and manual recovery requests. The backend suite has 62 passing tests. Targeted authentication lint and the optimized frontend build pass, including the new `/auth/reset` route.
 

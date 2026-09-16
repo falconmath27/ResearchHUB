@@ -16,6 +16,7 @@
 .error { margin: 20px 0 0; border: 1px solid #81413a; border-radius: 5px; background: #44211f; color: #ffc1bd; padding: 10px 12px; font-size: 12px; }
 .success { margin: 20px 0 0; border: 1px solid #356b57; border-radius: 5px; background: #173a30; color: #b7f3da; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
 .resetLink { display: inline-block; margin-top: 12px; border-radius: 5px; background: #176fe1; color: white; padding: 9px 12px; font-size: 12px; text-decoration: none; }
+.registerPrompt { margin-top: 12px; border: 1px solid #4d82a6; border-radius: 5px; background: transparent; color: #8dcef8; padding: 9px 12px; font-size: 12px; cursor: pointer; }
 .recoveryLinks { display: grid; justify-items: start; gap: 8px; margin-top: 20px; }
 .recoveryLinks button { border: 0; background: transparent; color: #71b6f4; padding: 0; font-size: 12px; cursor: pointer; text-align: left; }
 .recoveryLinks button:hover { text-decoration: underline; }

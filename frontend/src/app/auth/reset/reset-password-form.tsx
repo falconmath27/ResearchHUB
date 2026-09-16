@@ -48,7 +48,7 @@ export default function ResetPasswordForm({ initialToken }: { initialToken: stri
       <h1>Choose a new password</h1>
       <p className={styles.intro}>Reset links expire after 30 minutes and work only once.</p>
       {!isSuccess && <form className={styles.form} onSubmit={submitReset}>
-        <label>Reset token<input value={token} onChange={(event) => setToken(event.target.value)} minLength={32} required /></label>
+        {!initialToken && <label>Reset token<input value={token} onChange={(event) => setToken(event.target.value)} minLength={32} required /></label>}
         <label>New password<input autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} type="password" required /></label>
         <label>Confirm new password<input autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={8} type="password" required /></label>
         <button className={styles.submit} disabled={isSubmitting} type="submit">{isSubmitting ? "Updating..." : "Reset password"}</button>

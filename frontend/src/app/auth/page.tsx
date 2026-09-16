@@ -41,6 +41,7 @@ export default function AuthPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [developmentResetUrl, setDevelopmentResetUrl] = useState<string | null>(null);
+  const [showRegisterPrompt, setShowRegisterPrompt] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   function changeMode(nextMode: Mode) {
@@ -48,6 +49,7 @@ export default function AuthPage() {
     setErrorMessage("");
     setSuccessMessage("");
     setDevelopmentResetUrl(null);
+    setShowRegisterPrompt(false);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -55,6 +57,7 @@ export default function AuthPage() {
     setErrorMessage("");
     setSuccessMessage("");
     setDevelopmentResetUrl(null);
+    setShowRegisterPrompt(false);
     setIsSubmitting(true);
 
     try {
@@ -62,7 +65,10 @@ export default function AuthPage() {
         const response = await fetch(`${API_BASE_URL}/auth/password-reset/request`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }),
         });
-        if (!response.ok) throw new Error(await responseError(response, "Could not request a reset."));
+        if (!response.ok) {
+          if (response.status === 404) setShowRegisterPrompt(true);
+          throw new Error(await responseError(response, "Could not request a reset."));
+        }
         const result = await response.json();
         setSuccessMessage(result.message);
         setDevelopmentResetUrl(result.development_reset_url);
@@ -128,6 +134,7 @@ export default function AuthPage() {
         </form>
 
         {errorMessage && <p className={styles.error}>{errorMessage}</p>}
+        {showRegisterPrompt && <button className={styles.registerPrompt} onClick={() => changeMode("register")} type="button">Register a new account</button>}
         {successMessage && <p className={styles.success}>{successMessage}</p>}
         {developmentResetUrl && <Link className={styles.resetLink} href={developmentResetUrl.replace("http://localhost:3000", "")}>Open local reset page</Link>}
 

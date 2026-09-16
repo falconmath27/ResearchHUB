@@ -4,6 +4,31 @@ import re
 from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator
 from typing import Literal
 
+
+COMMON_EMAIL_DOMAIN_TYPOS = {
+    "gamil.com": "gmail.com",
+    "gmai.com": "gmail.com",
+    "gmail.co": "gmail.com",
+    "gmail.con": "gmail.com",
+    "gmial.com": "gmail.com",
+    "gmalil.com": "gmail.com",
+    "hotmai.com": "hotmail.com",
+    "hotmal.com": "hotmail.com",
+    "outlok.com": "outlook.com",
+    "yaho.com": "yahoo.com",
+}
+
+
+def normalize_email_with_typo_check(value: EmailStr) -> str:
+    normalized = str(value).strip().lower()
+    domain = normalized.rsplit("@", 1)[1]
+    suggested_domain = COMMON_EMAIL_DOMAIN_TYPOS.get(domain)
+    if suggested_domain is not None:
+        raise ValueError(
+            f"Email domain looks misspelled. Did you mean @{suggested_domain}?"
+        )
+    return normalized
+
 class ProjectTitle(BaseModel):
     """The first small validation exercise from Phase 0."""
 
@@ -40,7 +65,7 @@ class UserCreate(BaseModel):
     @field_validator("email")
     @classmethod
     def normalize_email(cls, value: EmailStr) -> str:
-        return str(value).strip().lower()
+        return normalize_email_with_typo_check(value)
 
 
 class User(BaseModel):
@@ -69,7 +94,7 @@ class PasswordResetRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def normalize_email(cls, value: EmailStr) -> str:
-        return str(value).strip().lower()
+        return normalize_email_with_typo_check(value)
 
 
 class PasswordResetRequestResult(BaseModel):

@@ -1283,9 +1283,7 @@ async def delete_attachment(
         delete_upload(stored_filename)
 
 
-PASSWORD_RESET_RESPONSE = (
-    "If an account exists for that email, password reset instructions are available."
-)
+PASSWORD_RESET_RESPONSE = "Password reset instructions are ready."
 
 
 def hash_reset_token(token: str) -> str:
@@ -1311,31 +1309,40 @@ async def request_password_reset(payload: PasswordResetRequest) -> PasswordReset
     fingerprint = email_fingerprint(str(payload.email))
 
     with SessionLocal() as session:
+        user = session.scalar(
+            select(UserRecord).where(func.lower(UserRecord.email) == str(payload.email))
+        )
+        if user is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No registered account was found for this email. Register first.",
+            )
+
         recent_attempts = session.scalar(
             select(func.count(PasswordResetAttemptRecord.id)).where(
                 PasswordResetAttemptRecord.email_fingerprint == fingerprint,
                 PasswordResetAttemptRecord.created_at >= now - timedelta(hours=1),
             )
         ) or 0
-        session.add(PasswordResetAttemptRecord(email_fingerprint=fingerprint))
-
-        user = session.scalar(
-            select(UserRecord).where(func.lower(UserRecord.email) == str(payload.email))
-        )
-        if user is not None and recent_attempts < PASSWORD_RESET_MAX_REQUESTS_PER_HOUR:
-            session.execute(
-                update(PasswordResetTokenRecord)
-                .where(
-                    PasswordResetTokenRecord.user_id == user.id,
-                    PasswordResetTokenRecord.used_at.is_(None),
-                )
-                .values(used_at=now)
+        if recent_attempts >= PASSWORD_RESET_MAX_REQUESTS_PER_HOUR:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many password reset requests. Try again later.",
             )
-            session.add(PasswordResetTokenRecord(
-                user_id=user.id,
-                token_hash=hash_reset_token(raw_token),
-                expires_at=now + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES),
-            ))
+        session.add(PasswordResetAttemptRecord(email_fingerprint=fingerprint))
+        session.execute(
+            update(PasswordResetTokenRecord)
+            .where(
+                PasswordResetTokenRecord.user_id == user.id,
+                PasswordResetTokenRecord.used_at.is_(None),
+            )
+            .values(used_at=now)
+        )
+        session.add(PasswordResetTokenRecord(
+            user_id=user.id,
+            token_hash=hash_reset_token(raw_token),
+            expires_at=now + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES),
+        ))
         session.commit()
 
     development_url = None

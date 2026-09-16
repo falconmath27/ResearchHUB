@@ -1022,7 +1022,7 @@ def test_password_reset_changes_password_revokes_sessions_and_consumes_token() -
     }).status_code == 400
 
 
-def test_password_reset_request_does_not_reveal_whether_account_exists() -> None:
+def test_password_reset_request_requires_a_registered_account() -> None:
     existing_response = client.post("/auth/password-reset/request", json={
         "email": "owner@example.com",
     })
@@ -1031,20 +1031,37 @@ def test_password_reset_request_does_not_reveal_whether_account_exists() -> None
     })
 
     assert existing_response.status_code == 202
-    assert missing_response.status_code == 202
-    assert existing_response.json()["message"] == missing_response.json()["message"]
-    assert missing_response.json()["development_reset_url"] is not None
+    assert existing_response.json()["development_reset_url"] is not None
+    assert missing_response.status_code == 404
+    assert missing_response.json()["detail"] == "No registered account was found for this email. Register first."
 
 
-def test_password_reset_requests_are_rate_limited_without_revealing_it() -> None:
+def test_registration_and_password_reset_reject_common_email_domain_typos() -> None:
+    registration_response = client.post("/auth/register", json={
+        "name": "Typo User",
+        "email": "person@gmalil.com",
+        "password": "securepass123",
+    })
+    reset_response = client.post("/auth/password-reset/request", json={
+        "email": "person@gmial.com",
+    })
+
+    assert registration_response.status_code == 422
+    assert "Did you mean @gmail.com?" in registration_response.text
+    assert reset_response.status_code == 422
+    assert "Did you mean @gmail.com?" in reset_response.text
+
+
+def test_password_reset_requests_are_rate_limited() -> None:
     responses = [
         client.post("/auth/password-reset/request", json={"email": "owner@example.com"})
         for _ in range(4)
     ]
 
-    assert all(response.status_code == 202 for response in responses)
+    assert [response.status_code for response in responses] == [202, 202, 202, 429]
+    assert responses[-1].json()["detail"] == "Too many password reset requests. Try again later."
     with SessionLocal() as session:
-        assert session.scalar(select(func.count(PasswordResetAttemptRecord.id))) == 4
+        assert session.scalar(select(func.count(PasswordResetAttemptRecord.id))) == 3
         assert session.scalar(select(func.count(PasswordResetTokenRecord.id))) == 3
 
 
