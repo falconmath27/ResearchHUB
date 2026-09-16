@@ -1,4 +1,6 @@
 from app.main import app, validate_project_title
+from datetime import datetime, timedelta, timezone
+import os
 from io import BytesIO
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +11,7 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from sqlalchemy import delete, func, inspect, select, text
 from app.database import engine, SessionLocal
-from app.models import AccountRecoveryRequestRecord, AnalysisJobRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from app.models import AccountRecoveryRequestRecord, AiDailyQuotaRecord, AnalysisJobRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
 
 
 from app.security import hash_password, verify_password
@@ -20,6 +22,7 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def reset_projects() -> None:
     with SessionLocal() as session:
+        session.execute(delete(AiDailyQuotaRecord))
         session.execute(delete(AnalysisJobRecord))
         session.execute(delete(AttachmentRecord))
         session.execute(delete(NoteVersionRecord))
@@ -815,6 +818,101 @@ def test_ai_analysis_rejects_fabricated_passage_id(monkeypatch) -> None:
     assert failed["status"] == "failed"
     assert failed["result"] is None
     assert failed["error_code"] == "ai_analysis_failed"
+
+
+def test_ai_daily_project_limit_counts_failures_and_retries(monkeypatch) -> None:
+    from app import main
+    from app.analysis import AnalysisExtractionError
+
+    create_test_project()
+    upload = client.post(
+        "/projects/1/attachments",
+        files={"file": ("study.txt", b"A sufficiently long research document to analyze.", "text/plain")},
+    )
+    attachment_id = upload.json()["id"]
+    client.post(f"/projects/1/attachments/{attachment_id}/analysis-jobs")
+    monkeypatch.setattr(main, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(main, "AI_DAILY_PROJECT_JOB_LIMIT", 2)
+
+    def fake_failure(_):
+        raise AnalysisExtractionError("provider_error", "Provider unavailable.")
+
+    monkeypatch.setattr(main, "analyze_attachment", fake_failure)
+    first = client.post(f"/projects/1/attachments/{attachment_id}/ai-analysis-jobs")
+    first_job = client.get(f"/projects/1/analysis-jobs/{first.json()['id']}").json()
+    second = client.post(f"/projects/1/analysis-jobs/{first_job['id']}/retry")
+    denied = client.post(f"/projects/1/attachments/{attachment_id}/ai-analysis-jobs")
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert denied.status_code == 429
+    with SessionLocal() as session:
+        quota = session.scalar(select(AiDailyQuotaRecord).where(AiDailyQuotaRecord.project_id == 1))
+        assert quota.reserved_jobs == 2
+
+
+def test_recovery_resumes_queued_and_fails_stale_processing() -> None:
+    from app.main import process_analysis_job, recover_abandoned_analysis_jobs
+
+    create_test_project()
+    upload = client.post(
+        "/projects/1/attachments",
+        files={"file": ("study.txt", b"A sufficiently long research document to recover.", "text/plain")},
+    )
+    attachment_id = upload.json()["id"]
+    with SessionLocal() as session:
+        queued = AnalysisJobRecord(
+            project_id=1, attachment_id=attachment_id, requested_by_id=1,
+            status="queued", kind="extraction", attempt=1,
+            active_key=f"attachment:{attachment_id}",
+        )
+        stale = AnalysisJobRecord(
+            project_id=1, attachment_id=attachment_id, requested_by_id=1,
+            status="processing", kind="ai", attempt=1,
+            active_key=f"ai:{attachment_id}",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+        )
+        session.add_all([queued, stale])
+        session.commit()
+        queued_id, stale_id = queued.id, stale.id
+
+    resumable = recover_abandoned_analysis_jobs()
+    process_analysis_job(queued_id)
+    with SessionLocal() as session:
+        assert queued_id in resumable
+        assert session.get(AnalysisJobRecord, queued_id).status == "completed"
+        failed = session.get(AnalysisJobRecord, stale_id)
+        assert failed.status == "failed"
+        assert failed.error_code == "worker_interrupted"
+        assert failed.active_key is None
+
+
+def test_live_ai_analysis_with_synthetic_source() -> None:
+    from app.config import OPENAI_API_KEY
+
+    if os.getenv("RUN_LIVE_AI_TEST") != "1" or not OPENAI_API_KEY:
+        pytest.skip("Set RUN_LIVE_AI_TEST=1 and OPENAI_API_KEY to make one real paid API call.")
+    create_test_project()
+    source = (
+        b"Synthetic ResearchHub study. Three teams tested a shared research workspace. "
+        b"The teams recorded 20 percent fewer duplicate notes after introducing a source library. "
+        b"They also completed assigned tasks two days earlier on average. "
+        b"This is synthetic test data, not a real published study. The sample is small and has no control group."
+    )
+    upload = client.post(
+        "/projects/1/attachments",
+        files={"file": ("synthetic-study.txt", source, "text/plain")},
+    )
+    assert upload.status_code == 201
+    attachment_id = upload.json()["id"]
+    extracted = client.post(f"/projects/1/attachments/{attachment_id}/analysis-jobs")
+    assert extracted.status_code == 202
+    analyzed = client.post(f"/projects/1/attachments/{attachment_id}/ai-analysis-jobs")
+    assert analyzed.status_code == 202
+    result = client.get(f"/projects/1/analysis-jobs/{analyzed.json()['id']}").json()
+    assert result["status"] == "completed", result.get("error_code")
+    assert result["result"]["summary"]
+    assert result["result"]["passages"]
+    assert result["result"]["usage"]["input_tokens"] is not None
 
 
 def test_pdf_attachment_analysis_job_extracts_embedded_text() -> None:

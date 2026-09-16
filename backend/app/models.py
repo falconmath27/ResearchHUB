@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -215,3 +215,13 @@ class AnalysisJobRecord(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AiDailyQuotaRecord(Base):
+    __tablename__ = "ai_daily_quotas"
+    __table_args__ = (UniqueConstraint("project_id", "day", name="uq_ai_daily_quotas_project_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    day: Mapped[date] = mapped_column(Date)
+    reserved_jobs: Mapped[int] = mapped_column(default=0)

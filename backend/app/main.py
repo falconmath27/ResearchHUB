@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import asyncio
+from contextlib import asynccontextmanager, suppress
 import hashlib
 import hmac
 import logging
@@ -50,9 +52,10 @@ from .config import (
     PASSWORD_RESET_DELIVERY_MODE,
     PASSWORD_RESET_EXPIRE_MINUTES,
     PASSWORD_RESET_MAX_REQUESTS_PER_HOUR,
+    AI_DAILY_PROJECT_JOB_LIMIT,
 )
 from .database import SessionLocal
-from .models import AccountRecoveryRequestRecord, AnalysisJobRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
+from .models import AccountRecoveryRequestRecord, AiDailyQuotaRecord, AnalysisJobRecord, AttachmentRecord, MessageRecord, NoteRecord, NoteVersionRecord, PasswordResetAttemptRecord, PasswordResetTokenRecord, ProjectMemberRecord, ProjectRecord, SourceRecord, TaskRecord, UserRecord
 from .analysis import AnalysisExtractionError, extract_attachment_text
 from .ai_analysis import analyze_attachment
 from .config import OPENAI_API_KEY
@@ -61,7 +64,18 @@ from .security import create_access_token, get_access_token_identity, hash_passw
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .storage import attachment_file_path, delete_upload, save_upload
 
-app = FastAPI(title="ResearchHub API", version="0.1.0")
+@asynccontextmanager
+async def app_lifespan(_: FastAPI):
+    watchdog = asyncio.create_task(analysis_job_watchdog())
+    try:
+        yield
+    finally:
+        watchdog.cancel()
+        with suppress(asyncio.CancelledError):
+            await watchdog
+
+
+app = FastAPI(title="ResearchHub API", version="0.1.0", lifespan=app_lifespan)
 logger = logging.getLogger(__name__)
 bearer_scheme = HTTPBearer()
 app.add_middleware(
@@ -309,7 +323,7 @@ def process_analysis_job(job_id: int) -> None:
         with SessionLocal() as session:
             session.execute(
                 update(AnalysisJobRecord)
-                .where(AnalysisJobRecord.id == job_id)
+                .where(AnalysisJobRecord.id == job_id, AnalysisJobRecord.status == "processing")
                 .values(
                     status="failed",
                     active_key=None,
@@ -325,7 +339,7 @@ def process_analysis_job(job_id: int) -> None:
         with SessionLocal() as session:
             session.execute(
                 update(AnalysisJobRecord)
-                .where(AnalysisJobRecord.id == job_id)
+                .where(AnalysisJobRecord.id == job_id, AnalysisJobRecord.status == "processing")
                 .values(
                     status="failed",
                     active_key=None,
@@ -336,6 +350,68 @@ def process_analysis_job(job_id: int) -> None:
                 )
             )
             session.commit()
+
+
+def recover_abandoned_analysis_jobs() -> list[int]:
+    """Resume queued work; fail old in-flight work rather than risking duplicate paid calls."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    with SessionLocal() as session:
+        session.execute(
+            update(AnalysisJobRecord)
+            .where(
+                AnalysisJobRecord.status == "processing",
+                AnalysisJobRecord.started_at < cutoff,
+            )
+            .values(
+                status="failed", active_key=None, result=None,
+                error_code="worker_interrupted",
+                error_message="Analysis was interrupted. You can retry it.",
+                completed_at=datetime.now(timezone.utc),
+            )
+        )
+        queued_ids = list(session.scalars(select(AnalysisJobRecord.id).where(
+            AnalysisJobRecord.status == "queued",
+        ).order_by(AnalysisJobRecord.id).limit(25)))
+        session.commit()
+    return queued_ids
+
+
+async def analysis_job_watchdog() -> None:
+    while True:
+        try:
+            queued_ids = await asyncio.to_thread(recover_abandoned_analysis_jobs)
+            for job_id in queued_ids:
+                await asyncio.to_thread(process_analysis_job, job_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Analysis job watchdog failed")
+        await asyncio.sleep(30)
+
+
+def reserve_ai_capacity(session, project_id: int) -> None:
+    """Atomically reserve one paid call, counting failed jobs and retries too."""
+    day = datetime.now(timezone.utc).date()
+    try:
+        with session.begin_nested():
+            session.add(AiDailyQuotaRecord(project_id=project_id, day=day, reserved_jobs=0))
+            session.flush()
+    except IntegrityError:
+        pass
+    reservation = session.execute(
+        update(AiDailyQuotaRecord)
+        .where(
+            AiDailyQuotaRecord.project_id == project_id,
+            AiDailyQuotaRecord.day == day,
+            AiDailyQuotaRecord.reserved_jobs < AI_DAILY_PROJECT_JOB_LIMIT,
+        )
+        .values(reserved_jobs=AiDailyQuotaRecord.reserved_jobs + 1)
+    )
+    if reservation.rowcount != 1:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Project AI analysis limit reached ({AI_DAILY_PROJECT_JOB_LIMIT} jobs per UTC day).",
+        )
 
 
 def require_project_editor(
@@ -1196,6 +1272,7 @@ async def create_ai_analysis_job(
             AnalysisJobRecord.attachment_id == attachment_id,
             AnalysisJobRecord.kind == "ai",
         )) or 0) + 1
+        reserve_ai_capacity(session, project_id)
         job = AnalysisJobRecord(
             project_id=project_id, attachment_id=attachment_id, requested_by_id=current_user.id,
             parent_job_id=extraction.id, kind="ai", status="queued", attempt=attempt,
@@ -1285,6 +1362,9 @@ async def retry_analysis_job(
         )
         if active_job is not None:
             return analysis_job_to_response(active_job)
+
+        if previous_job.kind == "ai":
+            reserve_ai_capacity(session, project_id)
 
         job = AnalysisJobRecord(
             project_id=project_id,

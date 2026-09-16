@@ -93,15 +93,20 @@ def analyze_attachment(file_path: Path) -> dict[str, object]:
         findings = data["findings"]
         if not isinstance(findings, list) or not 1 <= len(findings) <= 5:
             raise ValueError("Unexpected findings count")
-        cited_ids = data["summary_passage_ids"]
+        cited_ids = list(data["summary_passage_ids"])
+        if not cited_ids:
+            raise ValueError("Missing summary citation")
         for finding in findings:
-            cited_ids += finding["passage_ids"]
+            if not finding["passage_ids"]:
+                raise ValueError("Missing finding citation")
+            cited_ids.extend(finding["passage_ids"])
             if not isinstance(finding["claim"], str) or not finding["claim"].strip():
                 raise ValueError("Empty finding")
         if not cited_ids or any(cited not in allowed for cited in cited_ids):
             raise ValueError("Missing or unsupported passage citation")
         if not data["summary"].strip():
             raise ValueError("Empty summary")
+        usage = body.get("usage") or {}
         return {
             "stage": "ai_analysis_complete",
             "model": OPENAI_MODEL,
@@ -111,6 +116,10 @@ def analyze_attachment(file_path: Path) -> dict[str, object]:
             "limitations": data["limitations"],
             "passages": [allowed[cited] for cited in dict.fromkeys(cited_ids)],
             "passages_sent": len(passages),
+            "usage": {
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+            },
         }
     except (httpx.HTTPError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise AnalysisExtractionError(

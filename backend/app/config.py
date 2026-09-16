@@ -40,4 +40,7 @@ UPLOAD_DIRECTORY = Path(
 MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+AI_DAILY_PROJECT_JOB_LIMIT = int(os.getenv("AI_DAILY_PROJECT_JOB_LIMIT", "5"))
+if AI_DAILY_PROJECT_JOB_LIMIT < 1:
+    raise ValueError("AI_DAILY_PROJECT_JOB_LIMIT must be positive.")
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".csv", ".tsv", ".txt", ".docx", ".xlsx", ".json"}

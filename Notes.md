@@ -570,3 +570,11 @@ Migration `20260915_0010` creates the analysis job ledger and its project/attach
 - AI and extraction jobs have separate active keys and retry histories. Migration `20260916_0011` adds the job kind. FastAPI background execution remains an MVP risk: a crash can strand work; move to a durable queue with recovery and spending limits before production.
 - Interview answer: “I separated deterministic extraction from model analysis, bounded external input, required evidence IDs in a structured result, and failed closed on invalid citations while keeping retries and authorization in the existing job ledger.”
 - Verification: 71 backend tests pass (mocked model success/failure), frontend lint and production build pass; local SQLite migrated to `20260916_0011`. No live paid API call was made.
+
+## AI job recovery and spend guardrails
+
+- A 30-second watchdog resumes queued jobs after restart. Processing jobs older than 15 minutes become `worker_interrupted` failures; they are never auto-replayed because a provider call may already have been billed. Conditional state updates prevent a late worker from overwriting that failure.
+- Migration `20260916_0012` adds per-project, per-UTC-day AI reservations. The default limit is five new AI jobs, including retries and failures; change it with `AI_DAILY_PROJECT_JOB_LIMIT`. Atomic database updates enforce the cap across API workers. Input passages and output tokens remain bounded.
+- This is a **request-count guardrail, not a precise currency budget**: model prices vary. The API now stores provider token usage with successful results for later billing/reporting. Production should add organization-level billing alerts and a true monetary budget.
+- Interview answer: “I recovered persisted queued work, failed stale in-flight work instead of risking duplicate paid calls, and reserved daily capacity atomically before starting each AI job.”
+- Verification: 73 backend tests pass, one opt-in live test skips without a key; local migration is at `20260916_0012`. Set `OPENAI_API_KEY` and `RUN_LIVE_AI_TEST=1` to run the synthetic-source paid smoke test. No live call was possible in this environment because the key is not configured.
